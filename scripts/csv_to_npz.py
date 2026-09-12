@@ -104,14 +104,17 @@ class MotionLoader:
 
     def _load_motion(self):
         """Loads the motion from the csv file."""
+        # skip the header row if the csv file has one (e.g. booster_assets motion csvs)
+        with open(self.motion_file) as f:
+            header_skip = 1 if any(c.isalpha() for c in f.readline()) else 0
         if self.frame_range is None:
-            motion = torch.from_numpy(np.loadtxt(self.motion_file, delimiter=","))
+            motion = torch.from_numpy(np.loadtxt(self.motion_file, delimiter=",", skiprows=header_skip))
         else:
             motion = torch.from_numpy(
                 np.loadtxt(
                     self.motion_file,
                     delimiter=",",
-                    skiprows=self.frame_range[0] - 1,
+                    skiprows=header_skip + self.frame_range[0] - 1,
                     max_rows=self.frame_range[1] - self.frame_range[0] + 1,
                 )
             )

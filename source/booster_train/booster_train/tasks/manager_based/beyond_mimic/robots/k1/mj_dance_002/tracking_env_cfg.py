@@ -182,7 +182,7 @@ class EventCfg:
         mode="startup",
         params={
             # "asset_cfg": SceneEntityCfg("robot", body_names="torso_link"),
-            "asset_cfg": SceneEntityCfg("robot", body_names="Trunk"),
+            "asset_cfg": SceneEntityCfg("robot", body_names="trunk"),
             "com_range": {"x": (-0.025, 0.025), "y": (-0.05, 0.05), "z": (-0.05, 0.05)},
         },
     )
@@ -243,7 +243,7 @@ class RewardsCfg:
             "sensor_cfg": SceneEntityCfg(
                 "contact_forces",
                 body_names=[
-                    r"^(?!left_hand_link$)(?!right_hand_link$)(?!left_foot_link$)(?!right_foot_link$).+$"
+                    r"^(?!left_elbow_yaw_link$)(?!right_elbow_yaw_link$)(?!left_ankle_roll_link$)(?!right_ankle_roll_link$).+$"
                 ],
             ),
             "threshold": 1.0,
@@ -270,10 +270,10 @@ class TerminationsCfg:
             "command_name": "motion",
             "threshold": 0.25,
             "body_names": [
-                "left_hand_link",
-                "right_hand_link",
-                "left_foot_link",
-                "right_foot_link",
+                "left_elbow_yaw_link",
+                "right_elbow_yaw_link",
+                "left_ankle_roll_link",
+                "right_ankle_roll_link",
             ],
         },
     )
@@ -317,6 +317,14 @@ class TrackingEnvCfg(ManagerBasedRLEnvCfg):
         self.sim.render_interval = self.decimation
         self.sim.physics_material = self.scene.terrain.physics_material
         self.sim.physx.gpu_max_rigid_patch_count = 10 * 2**15
+        # shrink physx gpu buffers for small-gpu machines (defaults are sized for ~4096 envs)
+        self.sim.physx.gpu_max_rigid_contact_count = 2**20
+        self.sim.physx.gpu_found_lost_pairs_capacity = 2**19
+        self.sim.physx.gpu_found_lost_aggregate_pairs_capacity = 2**21
+        self.sim.physx.gpu_total_aggregate_pairs_capacity = 2**19
+        self.sim.physx.gpu_collision_stack_size = 2**24
+        self.sim.physx.gpu_heap_capacity = 2**24
+        self.sim.physx.gpu_temp_buffer_capacity = 2**23
         # viewer settings
         self.viewer.eye = (1.5, 1.5, 1.5)
         self.viewer.origin_type = "asset_root"

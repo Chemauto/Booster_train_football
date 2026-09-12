@@ -182,7 +182,7 @@ class EventCfg:
         mode="startup",
         params={
             # "asset_cfg": SceneEntityCfg("robot", body_names="torso_link"),
-            "asset_cfg": SceneEntityCfg("robot", body_names="Trunk"),
+            "asset_cfg": SceneEntityCfg("robot", body_names="trunk"),
             "com_range": {"x": (-0.025, 0.025), "y": (-0.05, 0.05), "z": (-0.05, 0.05)},
         },
     )
@@ -243,7 +243,7 @@ class RewardsCfg:
             "sensor_cfg": SceneEntityCfg(
                 "contact_forces",
                 body_names=[
-                    r"^(?!left_foot_link$)(?!right_foot_link$).+$"
+                    r"^(?!left_ankle_roll_link$)(?!right_ankle_roll_link$).+$"
                 ],
             ),
             "threshold": 1.0,
@@ -252,43 +252,43 @@ class RewardsCfg:
     motion_foot_ori = RewTerm(
         func=mdp.motion_relative_body_orientation_error_exp,
         weight=15.0,
-        params={"command_name": "motion", "std": 0.2, "body_names": ["left_foot_link", "right_foot_link"]},
+        params={"command_name": "motion", "std": 0.2, "body_names": ["left_ankle_roll_link", "right_ankle_roll_link"]},
     )
 
     motion_foot_pos = RewTerm(
         func=mdp.motion_relative_body_position_error_exp,
         weight=30.0,
-        params={"command_name": "motion", "std": 0.2, "body_names": ["left_foot_link", "right_foot_link"]},
+        params={"command_name": "motion", "std": 0.2, "body_names": ["left_ankle_roll_link", "right_ankle_roll_link"]},
     )
 
     motion_hand_ori = RewTerm(
         func=mdp.motion_relative_body_orientation_error_exp,
         weight=10.0,
-        params={"command_name": "motion", "std": 0.2, "body_names": ["left_hand_link", "right_hand_link"]},
+        params={"command_name": "motion", "std": 0.2, "body_names": ["left_elbow_yaw_link", "right_elbow_yaw_link"]},
     )
 
     motion_hand_pos = RewTerm(
         func=mdp.motion_relative_body_position_error_exp,
         weight=15.0,
-        params={"command_name": "motion", "std": 0.2, "body_names": ["left_hand_link", "right_hand_link"]},
+        params={"command_name": "motion", "std": 0.2, "body_names": ["left_elbow_yaw_link", "right_elbow_yaw_link"]},
     )
 
     motion_trunk_ori = RewTerm(
         func=mdp.motion_relative_body_orientation_error_exp,
         weight=30.0,
-        params={"command_name": "motion", "std": 0.2, "body_names": ["Trunk"]},
+        params={"command_name": "motion", "std": 0.2, "body_names": ["trunk"]},
     )
 
     motion_trunk_pos = RewTerm(
         func=mdp.motion_relative_body_position_error_exp,
         weight=20.0,
-        params={"command_name": "motion", "std": 0.2, "body_names": ["Trunk"]},
+        params={"command_name": "motion", "std": 0.2, "body_names": ["trunk"]},
     )
 
     motion_trunk_ang_vel = RewTerm(
         func=mdp.motion_global_body_angular_velocity_error_exp,
         weight=5.0,
-        params={"command_name": "motion", "std": 3.14, "body_names": ["Trunk"]},
+        params={"command_name": "motion", "std": 3.14, "body_names": ["trunk"]},
     )
 
 
@@ -311,10 +311,10 @@ class TerminationsCfg:
             "command_name": "motion",
             "threshold": 0.25,
             "body_names": [
-                "left_hand_link",
-                "right_hand_link",
-                "left_foot_link",
-                "right_foot_link",
+                "left_elbow_yaw_link",
+                "right_elbow_yaw_link",
+                "left_ankle_roll_link",
+                "right_ankle_roll_link",
             ],
         },
     )

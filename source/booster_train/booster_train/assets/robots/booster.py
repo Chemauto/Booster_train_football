@@ -36,8 +36,8 @@ BOOSTER_K1_CFG = ArticulationCfg(
     init_state=ArticulationCfg.InitialStateCfg(
         pos=(0.0, 0.0, 0.57),
         joint_pos={
-            "Left_Shoulder_Roll": -1.3,
-            "Right_Shoulder_Roll": 1.3,
+            "left_shoulder_roll_joint": -1.3,
+            "right_shoulder_roll_joint": 1.3,
         },
         joint_vel={".*": 0.0},
     ),
@@ -48,33 +48,33 @@ BOOSTER_K1_CFG = ArticulationCfg(
             max_delay=8,
             min_delay=2,
             joint_names_expr=[
-                ".*_Hip_Pitch",
-                ".*_Hip_Roll",
-                ".*_Hip_Yaw",
-                ".*_Knee_Pitch",
+                ".*_hip_pitch_joint",
+                ".*_hip_roll_joint",
+                ".*_hip_yaw_joint",
+                ".*_knee_pitch_joint",
             ],
             booster_joint_cfgs={
-                ".*_Hip_Pitch": actuator.BoosterJointE6408(natural_freq = 4.0, damping_ratio = 1.5),
-                ".*_Hip_Roll": actuator.BoosterJointE4315(natural_freq = 4.0, damping_ratio = 1.5),
-                ".*_Hip_Yaw": actuator.BoosterJointE4310(natural_freq = 4.0, damping_ratio = 1.5),
-                ".*_Knee_Pitch": actuator.BoosterJointE6416(natural_freq = 4.0, damping_ratio = 1.0),
+                ".*_hip_pitch_joint": actuator.BoosterJointE6408(natural_freq = 4.0, damping_ratio = 1.5),
+                ".*_hip_roll_joint": actuator.BoosterJointE4315(natural_freq = 4.0, damping_ratio = 1.5),
+                ".*_hip_yaw_joint": actuator.BoosterJointE4310(natural_freq = 4.0, damping_ratio = 1.5),
+                ".*_knee_pitch_joint": actuator.BoosterJointE6416(natural_freq = 4.0, damping_ratio = 1.0),
             },
         ),
         "feet": BoosterDelayedPDActuatorCfg(
             max_delay=8,
             min_delay=2,
             joint_names_expr=[
-                ".*_Ankle_Pitch",
-                ".*_Ankle_Roll",
+                ".*_ankle_pitch_joint",
+                ".*_ankle_roll_joint",
             ],
             booster_joint_cfgs={
-                ".*_Ankle_Pitch": actuator.BoosterK1AnkleParaWrapperCfg(
+                ".*_ankle_pitch_joint": actuator.BoosterK1AnkleParaWrapperCfg(
                     base_joint_cfg=actuator.BoosterJointE4310(),
                     serial_index=0,
                     natural_freq = 4.0,
                     damping_ratio = 1.5,
                 ),
-                ".*_Ankle_Roll": actuator.BoosterK1AnkleParaWrapperCfg(
+                ".*_ankle_roll_joint": actuator.BoosterK1AnkleParaWrapperCfg(
                     base_joint_cfg=actuator.BoosterJointE4310(),
                     serial_index=1,
                     natural_freq = 4.0,
@@ -86,17 +86,17 @@ BOOSTER_K1_CFG = ArticulationCfg(
             max_delay=8,
             min_delay=2,
             joint_names_expr=[
-                ".*_Shoulder_Pitch",
-                ".*_Shoulder_Roll",
-                ".*_Elbow_Pitch",
-                ".*_Elbow_Yaw",
+                ".*_shoulder_pitch_joint",
+                ".*_shoulder_roll_joint",
+                ".*_elbow_pitch_joint",
+                ".*_elbow_yaw_joint",
             ],
             booster_joint_cfgs=actuator.BoosterJointR14(),
         ),
         "head": BoosterDelayedPDActuatorCfg(
             max_delay=8,
             min_delay=2,
-            joint_names_expr=[".*Head.*"],
+            joint_names_expr=[".*head.*"],
             booster_joint_cfgs=actuator.BoosterJointHT4438(),
         ),
     }
@@ -143,14 +143,14 @@ BOOSTER_T1_CFG = ArticulationCfg(
     init_state=ArticulationCfg.InitialStateCfg(
         pos=(0.0, 0.0, 0.70),
         joint_pos={
-            ".*_Shoulder_Pitch": 0.2,
-            "Left_Shoulder_Roll": -1.3,
-            "Right_Shoulder_Roll": 1.3,
-            "Left_Elbow_Yaw": -0.5,
-            "Right_Elbow_Yaw": 0.5,
-            ".*_Hip_Pitch": -0.2,
-            ".*_Knee_Pitch": 0.4,
-            ".*_Ankle_Pitch": -0.2,
+            ".*_shoulder_pitch_joint": 0.2,
+            "left_shoulder_roll_joint": -1.3,
+            "right_shoulder_roll_joint": 1.3,
+            "left_elbow_yaw_joint": -0.5,
+            "right_elbow_yaw_joint": 0.5,
+            ".*_hip_pitch_joint": -0.2,
+            ".*_knee_pitch_joint": 0.4,
+            ".*_ankle_pitch_joint": -0.2,
         },
         joint_vel={".*": 0.0},
     ),
@@ -160,48 +160,48 @@ BOOSTER_T1_CFG = ArticulationCfg(
             max_delay=8,
             min_delay=2,
             joint_names_expr=[
-                ".*_Shoulder_Pitch",
-                ".*_Shoulder_Roll",
-                ".*_Elbow_Pitch",
-                ".*_Elbow_Yaw",
+                ".*_shoulder_pitch_joint",
+                ".*_shoulder_roll_joint",
+                ".*_elbow_pitch_joint",
+                ".*_elbow_yaw_joint",
             ],
             booster_joint_cfgs=actuator.BoosterJointE4310(),
         ),
         "waist": BoosterDelayedPDActuatorCfg(
             max_delay=8,
             min_delay=2,
-            joint_names_expr=["Waist"],
+            joint_names_expr=[".*waist.*"],
             booster_joint_cfgs=actuator.BoosterJointE6408(),
         ),
         "legs": BoosterDelayedPDActuatorCfg(
             max_delay=8,
             min_delay=2,
             joint_names_expr=[
-                ".*_Hip_Pitch",
-                ".*_Hip_Roll",
-                ".*_Hip_Yaw",
-                ".*_Knee_Pitch",
+                ".*_hip_pitch_joint",
+                ".*_hip_roll_joint",
+                ".*_hip_yaw_joint",
+                ".*_knee_pitch_joint",
             ],
             booster_joint_cfgs={
-                ".*_Hip_Pitch": actuator.BoosterJointE8112(),
-                ".*_Hip_Roll": actuator.BoosterJointE6408(),
-                ".*_Hip_Yaw": actuator.BoosterJointE6408(),
-                ".*_Knee_Pitch": actuator.BoosterJointE8116(),
+                ".*_hip_pitch_joint": actuator.BoosterJointE8112(),
+                ".*_hip_roll_joint": actuator.BoosterJointE6408(),
+                ".*_hip_yaw_joint": actuator.BoosterJointE6408(),
+                ".*_knee_pitch_joint": actuator.BoosterJointE8116(),
             },
         ),
         "feet": BoosterDelayedPDActuatorCfg(
             max_delay=8,
             min_delay=2,
             joint_names_expr=[
-                ".*_Ankle_Pitch",
-                ".*_Ankle_Roll",
+                ".*_ankle_pitch_joint",
+                ".*_ankle_roll_joint",
             ],
             booster_joint_cfgs={
-                ".*_Ankle_Pitch": actuator.BoosterT1AnkleParaWrapperCfg(
+                ".*_ankle_pitch_joint": actuator.BoosterT1AnkleParaWrapperCfg(
                     base_joint_cfg=actuator.BoosterJointE4315(),
                     serial_index=0,
                 ),
-                ".*_Ankle_Roll": actuator.BoosterT1AnkleParaWrapperCfg(
+                ".*_ankle_roll_joint": actuator.BoosterT1AnkleParaWrapperCfg(
                     base_joint_cfg=actuator.BoosterJointE4315(),
                     serial_index=1,
                 ),
@@ -210,7 +210,7 @@ BOOSTER_T1_CFG = ArticulationCfg(
         "head": BoosterDelayedPDActuatorCfg(
             max_delay=8,
             min_delay=2,
-            joint_names_expr=[".*Head.*"],
+            joint_names_expr=[".*head.*"],
             booster_joint_cfgs=actuator.BoosterJointDM4310(),
         ),
     },
