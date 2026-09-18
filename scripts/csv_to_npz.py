@@ -10,6 +10,7 @@
 """Launch Isaac Sim Simulator first."""
 
 import argparse
+import os
 import sys
 import numpy as np
 
@@ -17,7 +18,7 @@ from isaaclab.app import AppLauncher
 
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Replay motion from csv file and output to npz file.")
-parser.add_argument("--input_file", type=str, required=True, help="The path to the input motion csv file.")
+parser.add_argument("--input_file", type=str, default=None, help="The path to the input motion csv file.")
 parser.add_argument("--input_fps", type=int, default=30, help="The fps of the input motion.")
 parser.add_argument(
     "--frame_range",
@@ -29,8 +30,18 @@ parser.add_argument(
         " loaded."
     ),
 )
-parser.add_argument("--output_name", type=str, required=True, help="The name of the motion npz file.")
+parser.add_argument("--output_name", type=str, default=None, help="The name of the motion npz file.")
 parser.add_argument("--output_fps", type=int, default=50, help="The fps of the output motion.")
+parser.add_argument(
+    "--input_dir",
+    type=str,
+    default=None,
+    help="Batch mode: convert every csv under this dir (recursively); fps taken from dir_fps_map. "
+    "Output npz mirrors the relative path under --output_dir.",
+)
+parser.add_argument("--dir_fps_map", type=str, default="",
+    help="comma list of subdir:fps pairs for batch mode, e.g. 'walk:30,kick:50'")
+parser.add_argument("--output_dir", type=str, default=None, help="Output root dir for batch mode.")
 
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
@@ -221,15 +232,24 @@ class MotionLoader:
         return state, reset_flag
 
 
-def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene, joint_names: list[str]):
-    """Runs the simulation loop."""
+def convert_one(
+    sim: sim_utils.SimulationContext,
+    scene: InteractiveScene,
+    joint_names: list[str],
+    input_file: str,
+    input_fps: int,
+    output_fps: int,
+    output_name: str,
+    frame_range: tuple[int, int] | None = None,
+):
+    """Replays one csv through kinematics and saves the npz. Returns when done."""
     # Load motion
     motion = MotionLoader(
-        motion_file=args_cli.input_file,
-        input_fps=args_cli.input_fps,
-        output_fps=args_cli.output_fps,
+        motion_file=input_file,
+        input_fps=input_fps,
+        output_fps=output_fps,
         device=sim.device,
-        frame_range=args_cli.frame_range,
+        frame_range=frame_range,
     )
 
     # Extract scene entities
@@ -238,7 +258,7 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene, joi
 
     # ------- data logger -------------------------------------------------------
     log = {
-        "fps": [args_cli.output_fps],
+        "fps": [output_fps],
         "joint_pos": [],
         "joint_vel": [],
         "body_pos_w": [],
@@ -306,9 +326,9 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene, joi
             ):
                 log[k] = np.stack(log[k], axis=0)
 
-            np.savez(f"{args_cli.output_name}", **log)
-            print(f"[INFO]: Motion saved to {args_cli.output_name}")
-            sys.exit(0)
+            np.savez(output_name, **log)
+            print(f"[INFO]: Motion saved to {output_name}")
+            return
 
 
 def main():
@@ -324,12 +344,38 @@ def main():
     sim.reset()
     # Now we are ready!
     print("[INFO]: Setup complete...")
-    # Run the simulator
-    run_simulator(
-        sim,
-        scene,
-        joint_names=JOINT_NAMES,
-    )
+    if args_cli.input_dir is not None:
+        fps_map = dict(pair.split(":") for pair in args_cli.dir_fps_map.split(",") if pair)
+        jobs = []
+        for root, _, files in os.walk(args_cli.input_dir):
+            rel = os.path.relpath(root, args_cli.input_dir)
+            fps = int(fps_map.get(rel, args_cli.input_fps))
+            for fn in sorted(files):
+                if fn.endswith(".csv"):
+                    src = os.path.join(root, fn)
+                    dst = os.path.join(
+                        args_cli.output_dir, rel, os.path.splitext(fn)[0] + ".npz"
+                    )
+                    os.makedirs(os.path.dirname(dst), exist_ok=True)
+                    jobs.append((src, fps, dst))
+        print(f"[INFO]: batch mode, {len(jobs)} files")
+        for i, (src, fps, dst) in enumerate(jobs):
+            print(f"[INFO]: ({i + 1}/{len(jobs)}) {src} @{fps}fps -> {dst}")
+            convert_one(
+                sim, scene, JOINT_NAMES,
+                input_file=src, input_fps=fps,
+                output_fps=args_cli.output_fps, output_name=dst,
+            )
+    else:
+        convert_one(
+            sim, scene, JOINT_NAMES,
+            input_file=args_cli.input_file,
+            input_fps=args_cli.input_fps,
+            output_fps=args_cli.output_fps,
+            output_name=args_cli.output_name,
+            frame_range=args_cli.frame_range,
+        )
+        sys.exit(0)
 
 
 if __name__ == "__main__":

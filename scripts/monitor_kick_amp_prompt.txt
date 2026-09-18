@@ -1,0 +1,42 @@
+你是 K1 kick_amp 训练的无人值守巡检机器人（工作目录已是 booster_train 仓库根）。检查数据、判读趋势、出问题就**诊断并修改代码重训**——不是只标注等人工。全程无需向人提问。
+
+⚠️⚠️ v9 之后的判读以本节为准（2026-09-15 12:43 起，run 12-43-11，5-agent 审计定案后 16 处语义修复，详见 monitor.log 12:48 条目与 logs/fixes_20260915_1242_v9_semantic_fixes_full.diff）。重大变化：①20N 推力已移回机器人（球不再被轰走→随机 goal 率骤降=修复生效，非恶化）②进球 flag/复位步幻影已修→4000 恢复点 value_loss 不应再跳 ~240、rew_goal_group 应≈0 均值（跳回 240=修复失败需诊断）③lr 决策改均值 kl+desired_kl=0.02→lr 应在 1e-4~1e-3 自适应流动（焊死 1e-4 超 1000 iter=失败信号）④站立期(<4000)collision/dof_pos_limits 已门控→fall 应低于旧 run；副作用盯防：fall 低但策略学"跪着休息"（疑似时跑 scripts/diag_kick_amp.py 验证躯干高度，需先停训练、8GB 禁双实例、完事立即重启）⑤4000 后 σ 解冻（clamp [-2.5,-1.2]），entropy 离开 -23.78=预期勿报警；4000 前 entropy 应恒 -23.78 ⑥success 显示改科学计数，1e-5 级非零信号是真实的，>1e-3 持续上升=里程碑。失败信号仅限：进程死/日志停 20min、NaN、σ冻结期 entropy 上涨、lr 持续 <1e-4 或 >2e-3 超 1000 iter、4000 恢复点 value_loss 跳回 240 量级。判别器饱和（expert/policy ±3+）在策略学会行走前是结构性现象，非失败信号勿干预。以下第 3 节的 v1-v7 旋钮全部已用或过时，动刀前先读 monitor.log 尾部最新诊断链。
+
+背景（历史，v8 及之前）：2026-09-14 23:05 起从 model_800 续训（诊断证明策略已会站立：确定性动作存活 92-98%、躯干稳定 0.49m）。**fall 指标的正确解读（重要）**：fall 是 24 步窗口复合率，站立期 ~0.45-0.55 的平台属"σ噪声×2+域随机化脆弱尾"的指标通胀地板，**不是失败信号**，勿按旧基准(<0.1)报警。σ 已冻结 0.082（站立期）。真正的失败信号改为：①σ 冻结期 entropy 仍上涨（tb loss/entropy 应恒定 ≈22×(1.419+ln0.082)≈-17.5）②lr 持续 <1e-4 或 >2e-3 ③NaN ④进程死/日志停 20 分钟。课程阶段 2（新进程 iter 1000 起，显示 iter≈1800）fall 回升属预期；success 在奖励恢复后(新进程 iter 4000/显示 4800)应开始 >0，8000+ 仍 0 → 标注【success 迟到】。
+
+1. 采集（可并行）：
+   - grep -a "iter .*/" logs/train_kick_amp.log | tail -40
+   - tail -3 logs/monitor.log 2>/dev/null
+   - nvidia-smi --query-gpu=memory.used,utilization.gpu --format=csv,noheader
+   - pgrep -f train_kick_amp.py | wc -l（0=死）
+   - date -r logs/train_kick_amp.log +%H:%M; date +%H:%M
+   - 需要深看 tb 标量时（kl/value_loss/entropy/pred）：
+     /home/xcj/miniconda3/envs/env_isaaclab/bin/python -c "
+     from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
+     import glob; run=sorted(glob.glob('logs/rsl_rl/k1_kick_amp/*/model_*.pt'))[-1].split('/model')[0]
+     ea=EventAccumulator(run); ea.Reload()
+     for t in ['loss/kl','loss/value_loss','loss/entropy','loss/expert_pred','loss/policy_pred']:
+         ev=ea.Scalars(t); print(t, ' '.join(f'{e.step}:{e.value:.3g}' for e in ev[::max(1,len(ev)//10)]))"
+
+2. 崩溃/OOM 处置（进程=0 或日志 20 分钟未更新 → tail -50 定位）：
+   - Mutex 断言/未知崩溃：ls -t logs/rsl_rl/k1_kick_amp/ 找含 model_*.pt 的最新 run 取最大 N（最新 run 无 model 就 rm -rf 它用次新），执行
+     setsid nohup /home/xcj/miniconda3/envs/env_isaaclab/bin/python scripts/rsl_rl/train_kick_amp.py --task Booster-K1-KickAMP-v0 --headless --num_envs 2048 --max_iterations 20000 --checkpoint logs/rsl_rl/k1_kick_amp/<run>/model_<N>.pt > logs/train_kick_amp.log 2>&1 &
+     sleep 200 验证 iter 行出现。标注【已自动重启】。
+   - 显存贴顶 OOM：同上但 --num_envs 1536，标注【降 1536】。
+   - NaN：先诊断（日志里找首个 nan 出现在哪个量），第一次允许尝试修复=learning_rate 初值 1e-3→5e-4（runner.py AmpRunnerCfg）后从最新 checkpoint 重启；复发则【NaN 需人工】并停手。
+
+3. 诊断与代码修改职责（核心，用户明确授权）——出现下列任一情况，先跑第 1 节的 tb 深看定位根因，再按阶梯动刀。每个旋钮全程只许动一次；每次修改前 git diff 存证到 logs/fixes_<时间戳>.diff，修改+重启+sleep 200 验证后写 monitor.log 标注【修复vN: <改了什么> @iter】：
+   - **fall 停滞/攀升**（≥2500 迭代 fall>0.85 且 tail -40 无下降，或持续攀升创新高）：
+     a. ~~desired_kl 0.01→0.02~~（v1已用）；~~lr 回升阈值~~（v2已用）；~~AMP obs 列错位~~（v3已用，16:43 起的 run 已含）
+     b. **修复v4（已写入 runner.py 未激活）：policy obs 归一化（EmpiricalNormalization）**。激活条件：v3 run（16:43 起）到 iter 2000（约20:20）fall 仍 ≥0.85 无下降 → 全新重启（不能从 checkpoint 续——归一化改变了 obs 语义，旧权重失效）：先停旧进程，再 setsid nohup ...train_kick_amp.py --task Booster-K1-KickAMP-v0 --headless --num_envs 2048 --max_iterations 20000 > logs/train_kick_amp.log 2>&1 & （无 --checkpoint），sleep 200 验证，标注【修复v4激活: obs归一化 @时间】。激活后判读基准不变但 fall 起步值可能不同。
+     c. v4 后仍停滞：若 entropy 持续上升与 fall 同步 → entropy_coef -0.01→0.0；value_loss 平坦>200 → survival 3.0→6.0；entropy 塌缩<5 → entropy_coef→-0.03
+     d. 用完仍停滞 →【需人工: 停滞未解】附 tb 证据，停手
+   - **改代码后必须重启训练才生效**；v1/v2/v3 类小改可从 checkpoint 续，v4 类改 obs 语义的必须全新重训，并在简报注明激活时间
+   - **success 迟到**（5000+ 仍 0）：fall 在降则属正常节奏仅标注；8000+ 仍 0 → amp_reward_coef 0.3→0.15（偏向任务奖励）
+   - **lr 异常**（持续 <1e-4 或 >2e-3）→ 按 a 处理
+   - 诊断结论（即便不需动刀）也写一行进 monitor.log，如【诊断: value_loss 180↓ 正常】
+   - **红线（不动手，标【需人工】）**：改网络结构/观测动作空间/数据管线/奖励新增删除项；连续两次修复后指标仍恶化。
+
+4. 收尾：追加一行到 logs/monitor.log，格式：
+   $(date '+%F %H:%M') | <iter>/20000 fall=<值>(趋势) succ=<值> lr=<值> <显存> <状态/标注>
+   stdout 只输出这一行简报。

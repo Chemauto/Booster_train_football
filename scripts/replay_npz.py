@@ -95,15 +95,13 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
     else:
         raise ValueError("Either --motion or --registry_name must be provided.")
 
-    # Load npz file to get body names and determine body_indexes
-    # For K1, we typically use Trunk as anchor body (index 0)
-    # body_indexes should be a list of indices corresponding to the bodies we want to use
-    # For replay, we only need the anchor body (Trunk), which is typically at index 0
-    body_indexes = [0]  # Default to index 0 for anchor body (Trunk)
-    
+    # For replay, we only need the anchor body (trunk); joint state is written in full
     motion = MotionLoader(
         motion_file,
-        body_indexes,
+        ["trunk"],
+        robot.joint_names,
+        default_motion_body_names=robot.body_names,
+        default_motion_joint_names=robot.joint_names,
         tail_len=0,
         device=str(sim.device),
     )

@@ -32,6 +32,15 @@ parser.add_argument(
     "--distributed", action="store_true", default=False, help="Run training with multiple GPUs or nodes."
 )
 parser.add_argument("--export_io_descriptors", action="store_true", default=False, help="Export IO descriptors.")
+parser.add_argument(
+    "--init_policy_path",
+    type=str,
+    default=None,
+    help=(
+        "Warm-start from a checkpoint whose observation gained channels right after the"
+        " command term (e.g. kick stage-1 -> stage-2). Incompatible with --resume."
+    ),
+)
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
@@ -103,6 +112,54 @@ torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 torch.backends.cudnn.deterministic = False
 torch.backends.cudnn.benchmark = False
+
+
+def load_appended_checkpoint(runner, checkpoint_path: str, env) -> None:
+    """Warm-start a policy whose observation gained channels right after the command term.
+
+    Plain policy layout before and after: ``[command | appended | rest]``. Every old
+    channel is copied in place so transferred weights keep their semantics; the
+    appended channels (ball obs + history) keep their random initialization, so
+    the inherited behaviour matches the old policy up to a bounded perturbation
+    from the new columns.
+
+    Ported from whole_body_tracking/scripts/rsl_rl/train.py (temporal-actor
+    branch removed; normalizer statistics explicitly skipped). The normalizer
+    skip is a deliberate deviation from the source: with empirical
+    normalization enabled, the per-channel mean/var/count buffers are dim-1
+    tensors that would fall into the generic "shift the tail" branch and be
+    silently mis-aligned; they must instead restart from identity and be
+    re-estimated under the new observation distribution.
+    """
+    payload = torch.load(checkpoint_path, map_location=runner.device)
+    old_state = payload["model_state_dict"]
+    policy = runner.alg.policy
+    new_state = policy.state_dict()
+    prefix = 2 * env.scene["robot"].num_joints  # command term = [joint_pos, joint_vel]
+
+    with torch.no_grad():
+        for name, old in old_state.items():
+            if name not in new_state:
+                continue
+            if "normalizer" in name or name.endswith((".count",)):
+                print(f"[INFO]: skipped normalizer statistic {name}: {tuple(old.shape)}")
+                continue
+            new = new_state[name]
+            if new.shape == old.shape:
+                new.copy_(old)
+            elif new.dim() == 2 and new.shape[0] == old.shape[0] and new.shape[1] > old.shape[1]:
+                appended = new.shape[1] - old.shape[1]
+                new[:, :prefix] = old[:, :prefix]
+                new[:, prefix + appended :] = old[:, prefix:]
+                print(f"[INFO]: channel-aligned {name}: {tuple(old.shape)} -> {tuple(new.shape)}")
+            elif new.dim() == 1 and new.shape[0] > old.shape[0]:
+                appended = new.shape[0] - old.shape[0]
+                new[:prefix] = old[:prefix]
+                new[prefix + appended :] = old[prefix:]
+                print(f"[INFO]: channel-aligned {name}: {tuple(old.shape)} -> {tuple(new.shape)}")
+            else:
+                print(f"[INFO]: skipped {name}: {tuple(old.shape)} -> {tuple(new.shape)}")
+    print(f"[INFO]: Warm-started from appended-observation checkpoint: {checkpoint_path}")
 
 
 @hydra_task_config(args_cli.task, args_cli.agent)
@@ -183,9 +240,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     runner.add_git_repo_to_log(__file__)
     # load the checkpoint
     if agent_cfg.resume or agent_cfg.algorithm.class_name == "Distillation":
+        if args_cli.init_policy_path is not None:
+            raise RuntimeError("--resume and --init_policy_path are mutually exclusive.")
         print(f"[INFO]: Loading model checkpoint from: {resume_path}")
         # load previously trained model
         runner.load(resume_path)
+    elif args_cli.init_policy_path is not None:
+        load_appended_checkpoint(runner, args_cli.init_policy_path, env.unwrapped)
 
     # dump the configuration into log-directory
     dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
