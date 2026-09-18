@@ -45,8 +45,8 @@ BOOSTER_K1_CFG = ArticulationCfg(
 
     actuators={
         "legs": BoosterDelayedPDActuatorCfg(
-            max_delay=8,
-            min_delay=2,
+            max_delay=4,   # paper Table 2: action delay U(0, 20) ms = 0-4 substeps @ 5ms
+            min_delay=0,
             joint_names_expr=[
                 ".*_hip_pitch_joint",
                 ".*_hip_roll_joint",
@@ -61,8 +61,8 @@ BOOSTER_K1_CFG = ArticulationCfg(
             },
         ),
         "feet": BoosterDelayedPDActuatorCfg(
-            max_delay=8,
-            min_delay=2,
+            max_delay=4,   # paper Table 2: action delay U(0, 20) ms = 0-4 substeps @ 5ms
+            min_delay=0,
             joint_names_expr=[
                 ".*_ankle_pitch_joint",
                 ".*_ankle_roll_joint",
@@ -83,8 +83,8 @@ BOOSTER_K1_CFG = ArticulationCfg(
             },
         ),
         "arms": BoosterDelayedPDActuatorCfg(
-            max_delay=8,
-            min_delay=2,
+            max_delay=4,   # paper Table 2: action delay U(0, 20) ms = 0-4 substeps @ 5ms
+            min_delay=0,
             joint_names_expr=[
                 ".*_shoulder_pitch_joint",
                 ".*_shoulder_roll_joint",
@@ -94,8 +94,8 @@ BOOSTER_K1_CFG = ArticulationCfg(
             booster_joint_cfgs=actuator.BoosterJointR14(),
         ),
         "head": BoosterDelayedPDActuatorCfg(
-            max_delay=8,
-            min_delay=2,
+            max_delay=4,   # paper Table 2: action delay U(0, 20) ms = 0-4 substeps @ 5ms
+            min_delay=0,
             joint_names_expr=[".*head.*"],
             booster_joint_cfgs=actuator.BoosterJointHT4438(),
         ),
@@ -157,8 +157,8 @@ BOOSTER_T1_CFG = ArticulationCfg(
     soft_joint_pos_limit_factor=0.9,
     actuators={
         "arms": BoosterDelayedPDActuatorCfg(
-            max_delay=8,
-            min_delay=2,
+            max_delay=4,   # paper Table 2: action delay U(0, 20) ms = 0-4 substeps @ 5ms
+            min_delay=0,
             joint_names_expr=[
                 ".*_shoulder_pitch_joint",
                 ".*_shoulder_roll_joint",
@@ -168,14 +168,14 @@ BOOSTER_T1_CFG = ArticulationCfg(
             booster_joint_cfgs=actuator.BoosterJointE4310(),
         ),
         "waist": BoosterDelayedPDActuatorCfg(
-            max_delay=8,
-            min_delay=2,
+            max_delay=4,   # paper Table 2: action delay U(0, 20) ms = 0-4 substeps @ 5ms
+            min_delay=0,
             joint_names_expr=[".*waist.*"],
             booster_joint_cfgs=actuator.BoosterJointE6408(),
         ),
         "legs": BoosterDelayedPDActuatorCfg(
-            max_delay=8,
-            min_delay=2,
+            max_delay=4,   # paper Table 2: action delay U(0, 20) ms = 0-4 substeps @ 5ms
+            min_delay=0,
             joint_names_expr=[
                 ".*_hip_pitch_joint",
                 ".*_hip_roll_joint",
@@ -190,8 +190,8 @@ BOOSTER_T1_CFG = ArticulationCfg(
             },
         ),
         "feet": BoosterDelayedPDActuatorCfg(
-            max_delay=8,
-            min_delay=2,
+            max_delay=4,   # paper Table 2: action delay U(0, 20) ms = 0-4 substeps @ 5ms
+            min_delay=0,
             joint_names_expr=[
                 ".*_ankle_pitch_joint",
                 ".*_ankle_roll_joint",
@@ -208,8 +208,8 @@ BOOSTER_T1_CFG = ArticulationCfg(
             },
         ),
         "head": BoosterDelayedPDActuatorCfg(
-            max_delay=8,
-            min_delay=2,
+            max_delay=4,   # paper Table 2: action delay U(0, 20) ms = 0-4 substeps @ 5ms
+            min_delay=0,
             joint_names_expr=[".*head.*"],
             booster_joint_cfgs=actuator.BoosterJointDM4310(),
         ),
