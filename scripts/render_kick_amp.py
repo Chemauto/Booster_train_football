@@ -35,6 +35,10 @@ parser.add_argument("--seed", type=int, default=123,
 parser.add_argument("--imperfect_perception", action="store_true",
                     help="Keep the perception noise/delay the policy was trained against (default off).")
 parser.add_argument("--actuator_delay", type=int, default=2)
+parser.add_argument("--env_spacing", type=float, default=40.0,
+                    help="Metres between environments. The chase camera sees ~13 m, so the "
+                         "default grid spacing puts a dozen other robots and goals in frame and "
+                         "the subject cannot be picked out.")
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
 app_launcher = AppLauncher(args)
@@ -78,6 +82,8 @@ def main():
     env_cfg.commands.soccer.ball_reset_enabled = True
     env_cfg.commands.soccer.ball_spawn_distance = (0.8, 2.0)
     env_cfg.commands.soccer.ball_spawn_bearing = (-math.pi, math.pi)
+    if args.env_spacing > 0:
+        env_cfg.scene.env_spacing = args.env_spacing
     # The prim path MUST be the env_-regex form: a single fixed prim
     # (/World/envs/env_0/...) gives the sensor num_envs==1 while the scene
     # resets env_ids=range(num_envs), so SensorBase._timestamp_last_update[
@@ -113,8 +119,12 @@ def main():
         """Point env `idx`'s camera at the midpoint of robot and ball, from
         behind (-y) and above. Called AFTER the frame is captured, so the
         capture carries a one-step-old pose (~20 ms, invisible at 25 fps)."""
+        # World frame for both: soccer.ball_pos_xy is field-local (env origins
+        # subtracted) while root_pos_w is world, so mixing them aims the camera at
+        # a point that drifts by the whole env offset -- invisible with one env
+        # (origin 0) and badly wrong at 40 m spacing.
         r = robot.data.root_pos_w[idx, :2]
-        b = soccer.ball_pos_xy[idx]
+        b = soccer.ball.data.root_pos_w[idx, :2]
         sep = float(torch.linalg.norm(r - b))
         back = min(BACK_MAX, BACK_MIN + BACK_PER_M * sep)
         height = min(HEIGHT_MAX, HEIGHT_MIN + HEIGHT_PER_M * sep)
@@ -128,21 +138,25 @@ def main():
     aim()
     frames, goals = [], 0
     falls, stand_steps, cur_stand = 0, [], 0
+    oof = 0
+    term_mgr = env.termination_manager
     with torch.no_grad():
         for t in range(args.steps):
             dist, _ = runner.model.act(runner.obs_norm(obs), runner.stacked_obs)
             obs, _, terminated, time_outs, _ = env.step(dist.mean)  # deterministic
             obs = obs["policy"]
             runner._push_obs(runner.obs_norm(obs), terminated | time_outs)
-            in_goal_now = bool(soccer.ball_in_goal_now[idx].item())
-            goals += int(in_goal_now)
+            goals += int(bool(soccer.ball_in_goal_now[idx].item()))
             cur_stand += 1
-            # A goal is a non-timeout DoneTerm too, so counting raw `terminated`
-            # as a fall reports every scored episode as a fall.
-            if terminated[idx].item() and not in_goal_now:
+            # Count the cause, never the raw `terminated` flag: the goal
+            # termination is a non-timeout DoneTerm, so the flag reports every
+            # scored episode as a fall (measured: falls == goals in all four
+            # clips of the first batch).
+            if bool(term_mgr.get_term("base_contact")[idx].item()):
                 falls += 1
                 stand_steps.append(cur_stand)
                 cur_stand = 0
+            oof += int(bool(term_mgr.get_term("out_of_field")[idx].item()))
             if t % 2 == 0:  # 50 Hz sim -> 25 fps video
                 frames.append(cam.data.output["rgb"][idx].cpu().numpy()[..., :3])
             aim()
@@ -153,7 +167,7 @@ def main():
                 b = soccer.ball_pos_xy[idx]
                 print(
                     f"t={t} robot=({float(r[0]):.2f},{float(r[1]):.2f}) "
-                    f"ball=({float(b[0]):.2f},{float(b[1]):.2f}) goals={goals} falls={falls}",
+                    f"ball=({float(b[0]):.2f},{float(b[1]):.2f}) goals={goals} falls={falls} oof={oof}",
                     flush=True,
                 )
 
