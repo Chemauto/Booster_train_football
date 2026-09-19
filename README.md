@@ -8,6 +8,12 @@ This repository follows the standard Isaac Lab project structure, and is tested 
 
 ![Booster K1 soccer simulation](media/sim1.gif)
 
+## Documentation
+
+- **[QUICKSTART.md](QUICKSTART.md)** — how to play, train and evaluate the K1 soccer task. Start here.
+- **[Project.md](Project.md)** — task and configuration reference: scene geometry, observations, the full reward table, terminations, AMP prior, PPO settings, evaluation protocol and known limitations.
+- **[docs/reports/2026-09-19-experiment-log.md](docs/reports/2026-09-19-experiment-log.md)** — what was tried, what broke, what it changed and what it measured.
+
 ## Installation
 
 - Install Isaac Lab by following the [installation guide](https://isaac-sim.github.io/IsaacLab/main/source/setup/installation/index.html).
