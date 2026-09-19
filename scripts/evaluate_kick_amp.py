@@ -49,6 +49,21 @@ def assess_approach(report):
             "criteria": "survival >=90%; >=80% survive, displace >=0.5m, reach <=0.55m and alternate support >=4 times"}
 
 
+GOAL_LINE_M = 7.11          # the same line the goal test uses
+GOAL_HALF_MOUTH_M = 1.3
+FIELD_HALF_WIDTH_M = 4.5
+BALL_END_ZONES = ("goal_mouth", "past_line_wide", "side_out", "far_end_out", "on_field")
+
+
+def ball_end_zone(x, y):
+    """Where the ball finished, in field coordinates, at the last active step."""
+    if x > 7.0:
+        return "goal_mouth" if abs(y) < GOAL_HALF_MOUTH_M else "past_line_wide"
+    if x < -7.0:
+        return "far_end_out"
+    return "side_out" if abs(y) > FIELD_HALF_WIDTH_M else "on_field"
+
+
 class CohortMetrics:
     """First-episode statistics using physical snapshots BEFORE automatic reset.
 
@@ -80,6 +95,25 @@ class CohortMetrics:
         self.ball_displacement = np.zeros(self.n)
         self.goal_progress = np.zeros(self.n)
         self.goal = np.zeros(self.n, bool)
+        # A scored episode now ends at the goal (TerminationCfg.goal), so the raw
+        # survival fraction counts a success as "did not survive". Keep that
+        # number for continuity and add the success-aware view next to it.
+        self.goal_ended = np.zeros(self.n, bool)
+        # Terminal geometry. Without it an out-of-field episode is only a count:
+        # the goal test is a one-step ball crossing of x = 7.11 inside the posts,
+        # so whether a failure was "ball went wide", "ball never reached the line"
+        # or "ball exited the side" cannot be told apart from the counters alone.
+        self.final_ball = np.array(ball, copy=True)
+        self.final_robot = np.array(robot, copy=True)
+        self.max_ball_x = np.full(self.n, -np.inf)
+        # Why does a shot miss wide? Two candidate mechanisms with different
+        # fixes: the ball leaves the foot sideways (charge the contact), or it is
+        # pushed straight and drifts/rolls wide (charging the contact cannot
+        # help). Recording the lateral speed at contact and at the line separates
+        # them; the y at the crossing says how wide the miss actually was.
+        self.contact_lateral_speed = np.zeros(self.n)
+        self.crossing_lateral_speed = np.full(self.n, -1.0)
+        self.crossing_y = np.full(self.n, np.nan)
         self.discontinuous = np.zeros(self.n, bool)
         self.end_reason = np.full(self.n, "horizon_censored", dtype=object)
         self.causes = {}
@@ -92,6 +126,9 @@ class CohortMetrics:
         terminated, timeout = np.asarray(terminated, bool), np.asarray(timeout, bool)
         active = self.active.copy()
         self.elapsed[active] += self.dt
+        self.final_ball[active] = ball[active]
+        self.final_robot[active] = robot[active]
+        self.max_ball_x[active] = np.maximum(self.max_ball_x[active], ball[active, 0])
         if foot_contacts is not None:
             contacts = np.asarray(foot_contacts, bool)
             code = np.where(contacts.sum(axis=1) == 1, contacts[:, 0].astype(int) + 2*contacts[:, 1].astype(int), 0)
@@ -113,6 +150,10 @@ class CohortMetrics:
         valid = active & ~self.discontinuous
         distance = np.linalg.norm(robot[:, :2] - ball[:, :2], axis=-1)
         self.minimum_distance[valid] = np.minimum(self.minimum_distance[valid], distance[valid])
+        lateral = np.abs(ball_velocity[:, 1])
+        foot_near = np.linalg.norm(feet - ball[:, None], axis=-1).min(axis=-1) < .25
+        self.contact_lateral_speed[valid & foot_near] = np.maximum(
+            self.contact_lateral_speed[valid & foot_near], lateral[valid & foot_near])
         previous_near = np.linalg.norm(self.previous_feet - self.previous_ball[:, None], axis=-1).min(axis=-1) < .25
         current_near = np.linalg.norm(feet - ball[:, None], axis=-1).min(axis=-1) < .25
         new_candidate = valid & ~self.contact_candidate & (previous_near | current_near)
@@ -132,11 +173,14 @@ class CohortMetrics:
                           out=np.zeros(self.n), where=np.abs(ball[:, 0] - self.previous_ball[:, 0]) > 1e-12)
         at_line = self.previous_ball + alpha[:, None] * (ball - self.previous_ball)
         mouth = (np.abs(at_line[:, 1]) + .11 < 1.3) & (at_line[:, 2] + .11 < 1.8) & (at_line[:, 2] >= 0.)
+        self.crossing_lateral_speed[crossing] = lateral[crossing]
+        self.crossing_y[crossing] = at_line[crossing, 1]
         self.goal |= touched & crossing & mouth
         for name, mask in causes.items():
             mask = np.asarray(mask, bool) & active
             self.causes[name] = self.causes.get(name, 0) + int(mask.sum())
             self.end_reason[mask] = name
+        self.goal_ended |= np.asarray(causes.get("goal", np.zeros(self.n, bool)), bool) & active
         fall = np.asarray(causes.get("base_contact", np.zeros(self.n, bool)), bool) & active
         self.fallen |= fall
         self.fall_time[fall] = self.elapsed[fall]
@@ -164,7 +208,15 @@ class CohortMetrics:
                 "contact_proxy": bool(self.contact_proxy[i]),
                 "ball_displacement_after_contact_m": float(self.ball_displacement[i]),
                 "ball_goal_progress_after_contact_m": float(self.goal_progress[i]),
-                "validated_goal": bool(self.goal[i]), "ball_discontinuity": bool(self.discontinuous[i]),
+                "final_ball_pos_m": [float(v) for v in self.final_ball[i, :2]],
+                "final_robot_pos_m": [float(v) for v in self.final_robot[i, :2]],
+                "max_ball_x_m": float(self.max_ball_x[i]),
+                "ball_end_zone": ball_end_zone(*self.final_ball[i, :2]),
+                "max_contact_lateral_speed_mps": float(self.contact_lateral_speed[i]),
+                "crossing_lateral_speed_mps": float(self.crossing_lateral_speed[i]),
+                "crossing_y_m": float(self.crossing_y[i]) if np.isfinite(self.crossing_y[i]) else None,
+                "validated_goal": bool(self.goal[i]), "ended_by_goal": bool(self.goal_ended[i]),
+                "ball_discontinuity": bool(self.discontinuous[i]),
             })
         return {
             "cohort_size": self.n, "first_episode_survival_fraction": float(self.active.mean()),
@@ -173,6 +225,11 @@ class CohortMetrics:
             "mean_first_episode_duration_s": float(self.elapsed.mean()),
             "contact_proxy_count": int(self.contact_proxy.sum()), "validated_goal_count": int(self.goal.sum()),
             "validated_goal_fraction": float(self.goal.mean()), "ball_discontinuity_count": int(self.discontinuous.sum()),
+            "ball_end_zone_counts": {z: int(sum(ball_end_zone(*self.final_ball[i, :2]) == z for i in range(self.n)))
+                                     for z in BALL_END_ZONES},
+            "ball_reached_goal_line_count": int((self.max_ball_x > GOAL_LINE_M).sum()),
+            "goal_terminated_count": int(self.goal_ended.sum()),
+            "first_episode_success_or_survival_fraction": float((self.active | self.goal_ended).mean()),
             "termination_causes": self.causes, "per_env": per_env,
         }
 

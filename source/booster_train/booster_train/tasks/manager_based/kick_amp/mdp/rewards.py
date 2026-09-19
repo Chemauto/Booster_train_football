@@ -16,6 +16,9 @@ from .commands import (
     SoccerStateCommand,
     CAMERA_BODY_TO_OPTICAL_WXYZ,
     CAMERA_OFFSET_B,
+    FIELD_HALF_LENGTH,
+    FIELD_HALF_WIDTH,
+    GOAL_X,
     task_curriculum,
 )
 
@@ -70,8 +73,19 @@ def survival(env: ManagerBasedEnv) -> torch.Tensor:
 
 
 def termination(env: ManagerBasedEnv) -> torch.Tensor:
-    # falls only: time-outs and ball resets are not punished (t1.py)
-    return env.termination_manager.terminated.float()
+    """Falls and field exits only: a scored goal is a success, not a failure (t1.py).
+
+    Scoring is registered as a DoneTerm so the evaluation can label the episode
+    and so the value function treats it as a true terminal state, but it must not
+    collect this -1000: the whole objective is to put the ball in the goal, and
+    charging 1000 for achieving it would teach the policy to stay away from the
+    goal line.
+    """
+    tm = env.termination_manager
+    fired = tm.terminated.float()
+    if "goal" in tm.active_terms:
+        fired = fired - tm.get_term("goal").float()
+    return fired
 
 
 def pos_still(env: ManagerBasedEnv, penalize_pos: float = 0.1, penalize_yaw: float = 1.0,
@@ -80,8 +94,12 @@ def pos_still(env: ManagerBasedEnv, penalize_pos: float = 0.1, penalize_yaw: flo
 
     Anti-freeze term. Its own 50-step history requirement is the natural
     curriculum: it cannot fire until the robot has survived one full second,
-    so no global iteration gate is needed. It also exempts robots within 1 m
-    of the ball, preserving the valid "approach then hold balance" solution.
+    so no global iteration gate is needed.
+
+    ``penalize_pos_distance`` is the ball-exemption radius. The config sets it to
+    0.3 m, which is contact range, so the legitimate "arrive, then hold balance to
+    kick" solution survives; at the original 1.0 m it instead created a parking
+    space, where a policy can stop short of the ball and pay nothing.
     """
     cmd = _cmd(env)
     buf = cmd.base_pos_buffer
@@ -95,6 +113,31 @@ def pos_still(env: ManagerBasedEnv, penalize_pos: float = 0.1, penalize_yaw: flo
         & (torch.all(yaw_dist < penalize_yaw, dim=-1) | torch.all(pos_dist < 0.3, dim=-1))
         & (torch.norm(cmd.relative_ball_pos, dim=-1) > penalize_pos_distance)
     ).float() * (1.0 if cmd.cfg.training_phase == "approach" else task_curriculum(env))
+
+
+def boundary_distance(env: ManagerBasedEnv, guard: float = 0.3) -> torch.Tensor:
+    """Dense penalty for nearing the field edge, ramping quadratically to 1 at the line.
+
+    The only other signal about the boundary is the out-of-field termination,
+    which is a 0/1 cliff, and the goal line *is* the field edge
+    (GOAL_X == FIELD_HALF_LENGTH == 7.0), so scoring means pushing the ball to
+    the boundary the robot must not cross. With no gradient in between, the
+    cheapest way to never trip the -1000 termination penalty is to not chase:
+    measured at model_3000, the policy parks 0.6 m from the ball and returns
+    contact proxies of 1/64. This turns the cliff into a ramp.
+
+    ``guard`` is deliberately small. To push the ball across x = 7 the robot's
+    centre stays roughly 0.3-0.7 m from the line, so a wider guard would tax the
+    scoring motion itself and recreate the same stall for the opposite reason.
+    """
+    cmd = _cmd(env)
+    d = torch.minimum(
+        FIELD_HALF_LENGTH - cmd.base_pos_xy[:, 0].abs(),
+        FIELD_HALF_WIDTH - cmd.base_pos_xy[:, 1].abs(),
+    )
+    # A zero guard would divide by zero; clamping the denominator makes it
+    # degenerate to a 0/1 indicator of being on or over the line instead of NaN.
+    return ((guard - d).clamp(min=0.0) / max(float(guard), 1e-9)).clamp(max=1.0) ** 2
 
 
 # ------------------------------------------------------------- kick shaping
@@ -294,3 +337,56 @@ def feet_slide(env: ManagerBasedEnv, near_ball: float = 0.5) -> torch.Tensor:
     body_vel = robot.data.body_lin_vel_w[:, cmd.feet_idx, :2]
     return (torch.sum(body_vel.norm(dim=-1) * contacts, dim=1)
             * _far_from_ball(env, cmd, near_ball) * (1.0 - task_curriculum(env)))
+
+def boundary_outward_speed(env: ManagerBasedEnv, guard: float = 0.6) -> torch.Tensor:
+    """Charge only the *outward* component of the base velocity near the field edge.
+
+    The distance-based variant cannot work on this task. GOAL_X equals
+    FIELD_HALF_LENGTH, so pushing the ball across the goal line necessarily
+    happens within ~0.3 m of the field edge; any guard wide enough to teach
+    deceleration therefore taxes the scoring push itself. Measured: switching the
+    distance term on took goals 74 -> 37 while it did cut out-of-field 215 -> 44.
+
+    What separates a legitimate scoring approach from running out of bounds is not
+    proximity but the direction of travel, so this term charges
+    max(0, outward speed) scaled by proximity to the nearest edge. Standing at the
+    line pushing the ball in costs nothing; charging at it costs.
+    """
+    cmd = _cmd(env)
+    xy = cmd.base_pos_xy
+    vel = env.scene["robot"].data.root_lin_vel_w[:, :2]
+    dx = FIELD_HALF_LENGTH - xy[:, 0].abs()
+    dy = FIELD_HALF_WIDTH - xy[:, 1].abs()
+    nearest_x = dx <= dy
+    outward = torch.where(nearest_x, torch.sign(xy[:, 0]) * vel[:, 0],
+                          torch.sign(xy[:, 1]) * vel[:, 1])
+    proximity = ((guard - torch.minimum(dx, dy)) / max(float(guard), 1e-9)).clamp(min=0.0, max=1.0)
+    return outward.clamp(min=0.0) * proximity
+
+
+def ball_lateral_speed(env: ManagerBasedEnv, dist_thresh: float = 0.3, max_speed: float = 2.0,
+                       near_goal: float = 3.0) -> torch.Tensor:
+    """Charge the sideways component of the ball's speed while a foot is on it.
+
+    Every remaining out-of-field episode at arm H2 is a ball sent past the goal
+    line outside the posts (37 of the last 38), and the goal line is the field
+    edge, so a lateral error at the line is both a missed goal and an exit. The
+    reward set pays for lateral foot sweeps (side_kick_ball, +20) and nothing
+    charges the resulting sideways ball motion.
+
+    MEASURED HARMFUL -- do not enable this without re-deriving it. Charging lateral
+    ball speed also charges the sideways taps that STEER the ball, so the policy
+    loses the corrections that would keep it on line. Arm H4 (weight -100, gate
+    5 m), from a checkpoint scoring 198/256: goals fell to 146, out of field rose
+    39 -> 95, and the wide misses rose 40 -> 90 while their contact lateral speed
+    only went 1.185 -> 1.021 m/s. At weight -10 the term was inert (logged -0.024
+    against side_kick_ball's +0.19). Lateral ball speed is not the same thing as
+    aim error. Kept because the measurement and the failure are worth recording.
+    """
+    cmd = _cmd(env)
+    edge = _feet_edge_pos_w(env, cmd)[:, :, :, 0:2]  # (N, 2 feet, 4 corners, xy)
+    ball_xy = cmd.ball.data.root_pos_w[:, :2] - env.scene.env_origins[:, :2]
+    to_ball = torch.norm(edge - ball_xy[:, None, None, :], dim=-1).amin(dim=(-1, -2))
+    lateral = cmd.ball.data.root_lin_vel_w[:, 1].abs().clamp(max=max_speed)
+    near = (cmd.ball_pos_xy[:, 0] > GOAL_X - near_goal).float()
+    return lateral * (to_ball < dist_thresh).float() * near

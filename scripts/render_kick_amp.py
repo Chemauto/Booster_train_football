@@ -1,12 +1,21 @@
 """Render a checkpoint policy to mp4: deterministic (mean) actions, a smooth
 chase camera tracking robot+ball, 25 fps output.
 
+The environment is configured by evaluate_kick_amp.configure_evaluation, so the
+clip shows the same physics, perception and ball layout the acceptance test
+measures. Without it the Play defaults leave perception noise, actuation delay
+randomisation and DR on, and a checkpoint trained with --nominal_physics
+--perfect_perception scores nothing (measured: 0 goals, 14 terminations in 1500
+steps) -- a video of a distribution the policy was never trained on.
+
 Requires the training process to be STOPPED first (8 GB GPU cannot host two
 Isaac Sim instances -- concurrent runs die with CUSOLVER_INTERNAL_ERROR).
 Restart training from the latest checkpoint afterwards.
 """
 
 import argparse
+import math
+from pathlib import Path
 
 from isaaclab.app import AppLauncher
 
@@ -16,6 +25,16 @@ parser.add_argument("--steps", type=int, default=1500)
 parser.add_argument("--out", type=str, default="logs/kick_amp_render.mp4")
 parser.add_argument("--num_envs", type=int, default=2)
 parser.add_argument("--env_index", type=int, default=0)
+# The graded protocol places the ball 0.8-2 m away at 0/+-90/180 deg from the
+# robot's heading; the Play default scatters it anywhere on the field, which
+# makes for a slow video that shows nothing about the cases being measured.
+parser.add_argument("--scenario", choices=("standing", "soccer", "approach"), default="soccer",
+                    help="Acceptance-protocol layout (evaluate_kick_amp.scenario_layout).")
+parser.add_argument("--seed", type=int, default=123,
+                    help="Acceptance cohort seed; the layout places the ball at 0/+-90/180 deg.")
+parser.add_argument("--imperfect_perception", action="store_true",
+                    help="Keep the perception noise/delay the policy was trained against (default off).")
+parser.add_argument("--actuator_delay", type=int, default=2)
 AppLauncher.add_app_launcher_args(parser)
 args = parser.parse_args()
 app_launcher = AppLauncher(args)
@@ -42,6 +61,23 @@ HEIGHT_MIN, HEIGHT_PER_M, HEIGHT_MAX = 2.6, 0.30, 5.5
 
 def main():
     env_cfg = parse_env_cfg("Booster-K1-KickAMP-v0-Play", device=args.device, num_envs=args.num_envs)
+    # Same environment as the acceptance test: no DR events, perception and
+    # actuation matching training, and the protocol's ball layout on reset.
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "evaluate_kick_amp", Path(__file__).resolve().with_name("evaluate_kick_amp.py"))
+    evaluation = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(evaluation)
+    evaluation.configure_evaluation(env_cfg, args.scenario, args.seed,
+                                    not args.imperfect_perception, args.actuator_delay)
+    # Render-only deviation, documented: the acceptance test disables the
+    # ball-only reset so that a robot chasing a ball out of play is measured as
+    # out of field. That makes a clip of a miss run to the edge of the arena and
+    # stay there (measured: 700 steps of walking after the ball at local x=11.5).
+    # Play continues here, and the ball comes back inside the graded geometry.
+    env_cfg.commands.soccer.ball_reset_enabled = True
+    env_cfg.commands.soccer.ball_spawn_distance = (0.8, 2.0)
+    env_cfg.commands.soccer.ball_spawn_bearing = (-math.pi, math.pi)
     # The prim path MUST be the env_-regex form: a single fixed prim
     # (/World/envs/env_0/...) gives the sensor num_envs==1 while the scene
     # resets env_ids=range(num_envs), so SensorBase._timestamp_last_update[
@@ -98,9 +134,12 @@ def main():
             obs, _, terminated, time_outs, _ = env.step(dist.mean)  # deterministic
             obs = obs["policy"]
             runner._push_obs(runner.obs_norm(obs), terminated | time_outs)
-            goals += int(soccer.goal_scored_now[idx].item())
+            in_goal_now = bool(soccer.ball_in_goal_now[idx].item())
+            goals += int(in_goal_now)
             cur_stand += 1
-            if terminated[idx].item():  # fall (not timeout)
+            # A goal is a non-timeout DoneTerm too, so counting raw `terminated`
+            # as a fall reports every scored episode as a fall.
+            if terminated[idx].item() and not in_goal_now:
                 falls += 1
                 stand_steps.append(cur_stand)
                 cur_stand = 0
@@ -108,11 +147,13 @@ def main():
                 frames.append(cam.data.output["rgb"][idx].cpu().numpy()[..., :3])
             aim()
             if t % 100 == 0:
-                r = robot.data.root_pos_w[idx]
+                # Field coordinates: root_pos_w is world, and with several envs the
+                # origin offset makes world x meaningless (env 8 sits ~20 m away).
+                r = robot.data.root_pos_w[idx][:2] - env.scene.env_origins[idx, :2]
                 b = soccer.ball_pos_xy[idx]
                 print(
-                    f"t={t} robot=({r[0]:.2f},{r[1]:.2f}) z={r[2]:.2f} "
-                    f"ball=({b[0]:.2f},{b[1]:.2f}) goals={goals} falls={falls}",
+                    f"t={t} robot=({float(r[0]):.2f},{float(r[1]):.2f}) "
+                    f"ball=({float(b[0]):.2f},{float(b[1]):.2f}) goals={goals} falls={falls}",
                     flush=True,
                 )
 

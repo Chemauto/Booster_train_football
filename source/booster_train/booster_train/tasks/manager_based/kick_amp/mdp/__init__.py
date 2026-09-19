@@ -5,7 +5,7 @@ from isaaclab.envs.mdp.observations import *  # noqa: F401, F403
 from booster_train.tasks.manager_based.beyond_mimic.mdp import randomize_joint_default_pos  # noqa: F401
 from .events import randomize_rigid_body_com_partial  # noqa: F401
 
-from .commands import SoccerStateCommand, SoccerStateCommandCfg  # noqa: F401
+from .commands import SoccerStateCommand, SoccerStateCommandCfg, ball_in_goal  # noqa: F401
 from .events import (  # noqa: F401
     record_phys_randomization,
     reset_ball_random,
@@ -21,6 +21,9 @@ from .observations import (  # noqa: F401
 )
 from .rewards import (  # noqa: F401
     action_rate_legs,
+    ball_lateral_speed,
+    boundary_distance,
+    boundary_outward_speed,
     collision,
     dof_pos_limits,
     face_ball_pitch,

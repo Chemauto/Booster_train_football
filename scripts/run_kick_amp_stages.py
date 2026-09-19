@@ -8,9 +8,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
-import re
 import signal
 import subprocess
 import sys
@@ -49,14 +49,37 @@ def main():
     parser.add_argument("--updates", type=int, default=500)
     parser.add_argument("--num_envs", type=int, default=1024)
     parser.add_argument("--training_phase", choices=("soccer", "approach"), default="soccer")
+    parser.add_argument("--task_weight_floor", type=float, default=0.0)
+    parser.add_argument("--boundary_weight", type=float, default=0.0,
+                        help="Dense field-edge penalty, <= 0 (0 = off); see train_kick_amp.py")
+    parser.add_argument("--boundary_outward_weight", type=float, default=0.0,
+                        help="Outward-velocity edge penalty, <= 0 (0 = off); see train_kick_amp.py")
+    parser.add_argument("--ball_spawn_bearing_deg", type=float, default=None,
+                        help="Spawn half-range in degrees; 180 places the ball anywhere on the circle (see train_kick_amp.py)")
+    parser.add_argument("--ball_lateral_weight", type=float, default=0.0,
+                        help="Lateral ball-speed penalty, <= 0 (0 = off); see train_kick_amp.py")
     parser.add_argument("--reset_optimization", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--training_profile", choices=("benchmark", "default"), default="benchmark",
                         help="default preserves configured randomization/perception; benchmark uses nominal physics and perfect perception")
     parser.add_argument("--motion_dir", type=Path, help="Pin and hash the dataset for all stages")
+    parser.add_argument("--eval_envs", type=int, default=64,
+                        help="Evaluation cohort. 64 is the established protocol and keeps historical "
+                             "comparisons valid; raise it (e.g. 256) when the decision turns on a count "
+                             "of 1-2 goals, where 64 scenes cannot separate signal from Poisson noise.")
     args = parser.parse_args()
-    if min(args.stages, args.updates, args.num_envs) <= 0:
-        parser.error("stage, update and environment counts must be positive")
+    if not math.isfinite(args.task_weight_floor) or not 0.0 <= args.task_weight_floor <= 1.0:
+        parser.error("--task_weight_floor must be finite and in [0, 1]")
+    if not math.isfinite(args.boundary_weight) or args.boundary_weight > 0.0:
+        parser.error("--boundary_weight must be finite and <= 0")
+    if not math.isfinite(args.boundary_outward_weight) or args.boundary_outward_weight > 0.0:
+        parser.error("--boundary_outward_weight must be finite and <= 0")
+    if not math.isfinite(args.ball_lateral_weight) or args.ball_lateral_weight > 0.0:
+        parser.error("--ball_lateral_weight must be finite and <= 0")
+    if args.ball_spawn_bearing_deg is not None and not 0.0 < args.ball_spawn_bearing_deg <= 180.0:
+        parser.error("--ball_spawn_bearing_deg must be in (0, 180]")
+    if min(args.stages, args.updates, args.num_envs, args.eval_envs) <= 0:
+        parser.error("stage, update, environment and evaluation counts must be positive")
     checkpoint = args.checkpoint.resolve(strict=True)
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -68,6 +91,11 @@ def main():
     motion_hash = motion_digest(motion_dir)
     state = {"pid": os.getpid(), "started": time.time(), "status": "starting",
              "source_sha256": source_hash, "initial_checkpoint": str(checkpoint), "training_phase": args.training_phase,
+             "task_weight_floor": args.task_weight_floor, "boundary_weight": args.boundary_weight,
+             "boundary_outward_weight": args.boundary_outward_weight,
+             "ball_spawn_bearing_deg": args.ball_spawn_bearing_deg,
+             "ball_lateral_weight": args.ball_lateral_weight,
+             "eval_envs": args.eval_envs,
              "training_profile": args.training_profile, "motion_dir": str(motion_dir) if motion_dir else None,
              "motion_sha256": motion_hash, "stages": []}
     child = None
@@ -112,31 +140,53 @@ def main():
             if motion_digest(motion_dir) != motion_hash:
                 raise RuntimeError("motion data changed during experiment; review before resuming")
             train_log = output / f"stage_{stage}_train.log"
+            completion_file = output / f"stage_{stage}_training.json"
+            if completion_file.exists():
+                raise RuntimeError(f"training completion file already exists: {completion_file}")
             command = [sys.executable, "scripts/rsl_rl/train_kick_amp.py", "--headless",
                        "--checkpoint", str(checkpoint), "--num_envs", str(args.num_envs),
+                       "--completion_file", str(completion_file),
                        "--max_iterations", str(args.updates), "--save_interval", "100",
                        "--experiment_name", "k1_kick_amp_" + args.training_phase,
+                       "--task_weight_floor", str(args.task_weight_floor),
+                       "--boundary_weight", str(args.boundary_weight),
+                       "--boundary_outward_weight", str(args.boundary_outward_weight),
+                       "--ball_lateral_weight", str(args.ball_lateral_weight),
                        "--training_phase", args.training_phase, "--seed", str(args.seed)]
             if args.training_profile == "benchmark":
                 command.extend(["--nominal_physics", "--perfect_perception", "--near_ball"])
             if motion_dir:
                 command.extend(["--motion_dir", str(motion_dir)])
+            if args.ball_spawn_bearing_deg is not None:
+                command.extend(["--ball_spawn_bearing_deg", str(args.ball_spawn_bearing_deg)])
             if stage == 1 and args.reset_optimization:
                 command.append("--reset_optimization")
             run(command, train_log, f"stage_{stage}_training")
-            matches = re.findall(r"\[train\] log dir: (.+)", train_log.read_text())
-            if len(matches) != 1:
-                raise RuntimeError("training did not report a unique output directory")
-            run_dir = ROOT / matches[0].strip()
-            checkpoints = list(run_dir.glob("model_*.pt"))
-            checkpoint = max(checkpoints, key=lambda p: int(p.stem.split("_")[-1]))
+            if not completion_file.is_file():
+                raise RuntimeError(f"training exited without a completion report; see {train_log}")
+            training = json.loads(completion_file.read_text())
+            counters = ("start_iteration", "requested_updates", "requested_end_iteration",
+                        "end_iteration", "completed_updates")
+            if (any(type(training.get(key)) is not int for key in counters)
+                    or training.get("status") != "completed"
+                    or training["start_iteration"] < 0
+                    or training["requested_updates"] != args.updates
+                    or training["requested_end_iteration"] != training["start_iteration"] + args.updates
+                    or training["end_iteration"] != training["requested_end_iteration"]
+                    or training["completed_updates"] != args.updates):
+                raise RuntimeError(f"training incomplete: {training}; see {train_log}")
+            if state["stages"] and training["start_iteration"] != state["stages"][-1]["training"]["end_iteration"]:
+                raise RuntimeError("training completion counters do not continue the preceding stage")
+            checkpoint = Path(training["checkpoint"])
+            if not checkpoint.is_absolute() or not checkpoint.is_file():
+                raise RuntimeError("training completion checkpoint does not exist at an absolute path")
             if source_digest() != source_hash:
                 raise RuntimeError("source changed during training; evaluation would be incomparable")
             if motion_digest(motion_dir) != motion_hash:
                 raise RuntimeError("motion data changed during training; review before evaluation")
             report = output / f"stage_{stage}_evaluation.json"
             run([sys.executable, "scripts/evaluate_kick_amp.py", "--headless", "--checkpoint", str(checkpoint),
-                 "--scenario", args.training_phase if args.training_phase == "approach" else "soccer", "--num_envs", "64", "--steps", "1500", "--seed", "123",
+                 "--scenario", args.training_phase if args.training_phase == "approach" else "soccer", "--num_envs", str(args.eval_envs), "--steps", "1500", "--seed", "123",
                  *(["--perfect_perception"] if args.training_profile == "benchmark" else []), "--output", str(report)],
                 output / f"stage_{stage}_evaluation.log", f"stage_{stage}_evaluating")
             result = json.loads(report.read_text())
@@ -144,7 +194,8 @@ def main():
             summary = {k: result[k] for k in ("first_episode_survival_fraction", "fall_count", "contact_proxy_count", "validated_goal_count")}
             for metric in ("robot_displacement_m", "robot_path_length_m", "approach_progress_m"):
                 summary["mean_" + metric] = sum(e[metric] for e in result["per_env"]) / n
-            state["stages"].append({"stage": stage, "checkpoint": str(checkpoint), "evaluation": str(report), **summary})
+            state["stages"].append({"stage": stage, "checkpoint": str(checkpoint), "training": training,
+                                    "evaluation": str(report), **summary})
             if args.training_phase == "approach":
                 from evaluate_kick_amp import assess_approach
                 gate = assess_approach(result)
@@ -152,7 +203,7 @@ def main():
                 if gate["passed"]:
                     confirmation = output / f"stage_{stage}_confirmation.json"
                     run([sys.executable, "scripts/evaluate_kick_amp.py", "--headless", "--checkpoint", str(checkpoint),
-                         "--scenario", "approach", "--num_envs", "64", "--steps", "1500", "--seed", "456",
+                         "--scenario", "approach", "--num_envs", str(args.eval_envs), "--steps", "1500", "--seed", "456",
                          *(["--perfect_perception"] if args.training_profile == "benchmark" else []), "--output", str(confirmation)],
                         output / f"stage_{stage}_confirmation.log", f"stage_{stage}_confirming")
                     confirm_gate = assess_approach(json.loads(confirmation.read_text()))

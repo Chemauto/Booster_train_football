@@ -67,16 +67,52 @@ MINIMAL = os.environ.get("KICK_AMP_MINIMAL", "0") == "1"
 TASK_RAMP_STEPS = 16000 * 24
 
 
+def ball_in_goal(ball_pos_xy: torch.Tensor, ball_pos_z: torch.Tensor) -> torch.Tensor:
+    """Whole ball past the goal line inside the mouth, below the bar.
+
+    Deliberately the same geometry as the acceptance test in
+    scripts/evaluate_kick_amp.py (line = GOAL_X + BALL_RADIUS, ball edge inside
+    the posts, ball top below the bar), so that "the episode ended by scoring"
+    means the same thing as "the evaluation counted a goal". The paper's
+    GOAL_SUCCESS_STEPS (=50 consecutive steps) is a stricter test than anything
+    the evaluation applies and in practice never fires -- the robot keeps playing
+    after the ball enters and knocks it back out -- so it cannot be the success
+    signal it is documented to be.
+    """
+    return (
+        (ball_pos_xy[:, 0] > GOAL_X + BALL_RADIUS)
+        & (ball_pos_xy[:, 1].abs() + BALL_RADIUS < GOAL_HALF_WIDTH)
+        & (ball_pos_z + BALL_RADIUS < GOAL_HEIGHT)
+    )
+
+
 def task_curriculum(env) -> float:
     """c in [0, 1]: gait rewards scale (1 - c), task rewards scale c."""
     if env.cfg.commands.soccer.training_phase == "approach":
         return 0.0
     return min(max(env.common_step_counter / TASK_RAMP_STEPS, 0.0), 1.0)
 
+
+def task_policy_weight(env) -> float:
+    """Weight normalized soccer advantages without changing gait incentives.
+
+    A floor can promote an already walking policy to soccer training while
+    retaining the original gait and stagnation schedules. Zero preserves the
+    original experiment; approach-only training always disables this critic.
+    """
+    cfg = env.cfg.commands.soccer
+    floor = float(getattr(cfg, "task_weight_floor", 0.0))
+    if not 0.0 <= floor <= 1.0:
+        raise ValueError("task_weight_floor must be finite and within [0, 1]")
+    if cfg.training_phase == "approach":
+        return 0.0
+    return max(task_curriculum(env), floor)
+
 FIELD_HALF_LENGTH = 7.0   # x in [-7, 7]  (RoboCup adult-size field, 14 m)
 FIELD_HALF_WIDTH = 4.5    # y in [-4.5, 4.5] (9 m)
 GOAL_X = 7.0              # goal line
 GOAL_HALF_WIDTH = 1.3     # goal mouth |y| < 1.3
+GOAL_HEIGHT = 1.8         # crossbar height, same as the acceptance test
 BALL_RADIUS = 0.11
 
 GOAL_SUCCESS_STEPS = 50   # ball in goal this many steps => episode success
@@ -210,6 +246,11 @@ class SoccerStateCommand(CommandTerm):
         self.goal_cnt = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         self.goal_scored_now = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self.goal_success_now = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        # Strict goal test (acceptance geometry) sampled BEFORE the ball-only
+        # teleport below, because that teleport would otherwise erase the goal in
+        # the same step it is detected: the ball lands at a random spot and every
+        # reader of the live position sees "not in the goal".
+        self.ball_in_goal_now = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         self.last_ball_in_goal = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         # previous-step caches for regularization rewards (t1.py last_* pattern)
         self.last_root_vel = torch.zeros(self.num_envs, 6, device=self.device)
@@ -243,6 +284,20 @@ class SoccerStateCommand(CommandTerm):
             dim=-1,
         )
 
+    def spawn_bearing(self) -> tuple[float, float]:
+        """Angular half-range of the spawn direction, in the robot's heading frame.
+
+        The default cone is +-0.8 rad, which never shows the policy a ball beside
+        or behind it. The acceptance protocol places the ball at 0/+-90/180 deg
+        from the robot's heading (evaluate_kick_amp.py::scenario_layout), so half
+        of every graded cohort tests a geometry the policy was never trained on --
+        and that is exactly where the first-episode falls concentrate (34 of 39)
+        and where the goal rate is lowest. ``ball_spawn_bearing`` widens it.
+        """
+        if self.cfg.ball_spawn_bearing is None:
+            return (-0.8, 0.8)
+        return self.cfg.ball_spawn_bearing
+
     def _random_ball_reset(self, env_ids: torch.Tensor):
         """Resets balls (only) to a random in-field spot, clear of the posts and the robot."""
         n = len(env_ids)
@@ -254,7 +309,8 @@ class SoccerStateCommand(CommandTerm):
             # robot's heading frame, outside its support polygon.
             radius = torch.empty(n, device=self.device).uniform_(*self.cfg.ball_spawn_distance)
             heading = yaw_from_quat(self.robot.data.root_quat_w[env_ids])
-            heading += torch.empty(n, device=self.device).uniform_(-0.8, 0.8)
+            heading += torch.empty(n, device=self.device).uniform_(*self.spawn_bearing())
+
             xy = self.base_pos_xy[env_ids] + radius[:, None] * torch.stack((heading.cos(), heading.sin()), dim=-1)
             xy[:, 0].clamp_(-FIELD_HALF_LENGTH + 0.3, FIELD_HALF_LENGTH - 0.3)
             xy[:, 1].clamp_(-FIELD_HALF_WIDTH + 0.3, FIELD_HALF_WIDTH - 0.3)
@@ -309,6 +365,7 @@ class SoccerStateCommand(CommandTerm):
         self.goal_cnt[:] = torch.where(in_goal, self.goal_cnt + 1, torch.zeros_like(self.goal_cnt))
         self.goal_scored_now[:] = in_goal & ~ball_out
         self.goal_success_now[:] = self.goal_cnt >= GOAL_SUCCESS_STEPS
+        self.ball_in_goal_now[:] = ball_in_goal(self.ball_pos_xy, self.ball_pos_z)
 
         # Settle the physical transition before resets or external kicks. In
         # particular, retain the final in-goal reward and any real progress on
@@ -334,7 +391,7 @@ class SoccerStateCommand(CommandTerm):
             )
         # Apply curriculum AFTER advantage normalization in the runner.
         # Scaling this entire reward group is cancelled by its own std.
-        env.extras["task_weight"] = 0.0 if MINIMAL else task_curriculum(env)
+        env.extras["task_weight"] = 0.0 if MINIMAL else task_policy_weight(env)
         # a just-reset env computes its potentials from the zeroed last_*
         # caches: that is a +/-tens phantom on the TERMINAL transition
         # (Isaac Lab resets before the command update; t1.py rewards before
@@ -440,7 +497,10 @@ class SoccerStateCommand(CommandTerm):
         # -- per-step bridge to the AMP runner ----------------------------------
         env.extras["amp_obs"] = self._compute_amp_obs()
         env.extras["privileged_obs"] = self._compute_privileged_obs()
-        env.extras["success"] = self.goal_success_now.float()
+        # Same predicate as the goal termination and the acceptance test: with the
+        # 50-step rule the training success rate would read ~0 once the episode
+        # ends at the goal, blinding the only training-side progress signal.
+        env.extras["success"] = self.ball_in_goal_now.float()
 
         # -- advance last_* caches ----------------------------------------------
         self.last_base_pos_xy[:] = self.base_pos_xy
@@ -470,6 +530,12 @@ class SoccerStateCommand(CommandTerm):
         log["ball_distance_m"] = distance.mean()
         log["base_height_m"] = self.robot.data.root_pos_w[:, 2].mean()
         log["task_weight"] = env.extras["task_weight"]
+        # The gait and stagnation terms scale by the *raw* curriculum, not by the
+        # floored policy weight (see task_policy_weight), so log the raw value
+        # too. With a non-zero task_weight_floor the two diverge and a matched
+        # A/B could not otherwise confirm from the logs that the gait and
+        # stagnation schedules were left untouched.
+        log["task_curriculum_raw"] = task_curriculum(env)
 
     @property
     def command(self) -> torch.Tensor:
@@ -478,7 +544,7 @@ class SoccerStateCommand(CommandTerm):
 
     def _update_metrics(self):
         self.metrics["goal"][:] = self.goal_scored_now.float()
-        self.metrics["success"][:] = self.goal_success_now.float()
+        self.metrics["success"][:] = self.ball_in_goal_now.float()
 
     def _compute_amp_obs(self) -> torch.Tensor:
         """39-dim AMP obs: gravity3 + lin_vel3 + ang_vel3 + dof12 + dof_vel12 + feet_rel6.
@@ -543,6 +609,7 @@ class SoccerStateCommand(CommandTerm):
         self.goal_cnt[env_ids] = 0
         self.goal_scored_now[env_ids] = False
         self.goal_success_now[env_ids] = False
+        self.ball_in_goal_now[env_ids] = False
         self.last_ball_in_goal[env_ids] = False
         # caches resync on the first _update_command after reset
         self.last_base_pos_xy[env_ids] = 0.0
@@ -555,6 +622,7 @@ class SoccerStateCommandCfg(CommandTermCfg):
     robot_asset: str = "robot"
     ball_asset: str = "ball"
     training_phase: str = "soccer"
+    task_weight_floor: float = 0.0
     reset_motion_fraction: float | None = None
     motion_dir: str = ""  # AMP dataset root (walk/ + kick/ npz subdirs)
 
@@ -571,3 +639,7 @@ class SoccerStateCommandCfg(CommandTermCfg):
     ball_friction_range: tuple[float, float] = (0.1, 0.3)
     perfect_perception: bool = False
     ball_spawn_distance: tuple[float, float] | None = None
+    # Angular half-range of the spawn direction in the robot's heading frame;
+    # None keeps the original +-0.8 rad cone. (radians(-v), radians(v)) spans the
+    # full circle at v = 180, matching the acceptance protocol's bearings.
+    ball_spawn_bearing: tuple[float, float] | None = None

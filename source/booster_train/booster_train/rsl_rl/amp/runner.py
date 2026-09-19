@@ -11,7 +11,7 @@ Env contract (all via env.step extras):
     extras["amp_obs"]        (N, AMP_OBS_DIM)      current-step AMP obs
     extras["privileged_obs"] (N, 14)               decoder reconstruction target
     extras["rew_groups"]     (N, 2)                goal-cluster reward, 0 placeholder
-    extras["success"]        (N,)                  goal held >= 50 steps
+    extras["success"]        (N,)                  ball in the goal (acceptance-test geometry)
     extras["time_outs"]      (N,)
 and the env reward buffer fills reward group 1 (+ AMP style reward added here).
 """
@@ -527,7 +527,7 @@ class AmpRunner:
                 entropy = dist.entropy().sum(dim=-1).mean()
                 reconstruction_loss = F.mse_loss(priv_est, buf["privileged"].flatten(0, 1)[batch_idx])
                 mirrored_stack_b = mirror(
-                    buf["stacked"].flatten(0, 1)[batch_idx].reshape(-1, self.obs_dim), self.joint_names, self.device
+                    stacked_b.reshape(-1, self.obs_dim), self.joint_names, self.device
                 ).reshape(-1, cfg.num_stack, self.obs_dim)
                 mirrored_dist, _ = self.model.act(buf["mirrored"].flatten(0, 1)[batch_idx], mirrored_stack_b)
                 symmetric_loss = F.mse_loss(dist.loc, mirror_act(mirrored_dist.loc, self.joint_names, self.device))

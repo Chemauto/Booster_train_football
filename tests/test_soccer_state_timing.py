@@ -51,11 +51,22 @@ class Ball:
 
 def command():
     geo = load(MDP/'geometry.py', ['yaw_from_quat'])
+    # The goal predicate is used by _update_command, so the fixture must supply the
+    # real one, extracted from the source with its own GOAL_HEIGHT rather than a
+    # copy that could drift from the acceptance geometry.
+    constants = {ast.unparse(n.targets[0]): ast.literal_eval(n.value)
+                 for n in ast.parse((MDP/'commands.py').read_text()).body
+                 if isinstance(n, ast.Assign) and ast.unparse(n.targets[0]) in
+                 ('GOAL_X', 'GOAL_HALF_WIDTH', 'GOAL_HEIGHT', 'BALL_RADIUS')}
+    goal_scope = load(MDP/'commands.py', ['ball_in_goal'], **constants)
+    goal_height = constants['GOAL_HEIGHT']
+    ball_in_goal = goal_scope['ball_in_goal']
     cls = load(MDP/'commands.py', ['SoccerStateCommand'], CommandTerm=object,
                MINIMAL=False, FIELD_HALF_LENGTH=7., FIELD_HALF_WIDTH=4.5, GOAL_X=7.,
                GOAL_HALF_WIDTH=1.3, BALL_RADIUS=.11, GOAL_SUCCESS_STEPS=50,
+               GOAL_HEIGHT=goal_height, ball_in_goal=ball_in_goal,
                CAMERA_OFFSET_B=(0.,0.,0.), CAMERA_BODY_TO_OPTICAL_WXYZ=(1.,0.,0.,0.),
-               CAMERA_FOV_H=87., CAMERA_FOV_V=58., task_curriculum=lambda _:1.,
+               CAMERA_FOV_H=87., CAMERA_FOV_V=58., task_curriculum=lambda _:1., task_policy_weight=lambda _:1.,
                quat_rotate=rotate, quat_rotate_inverse=inverse, quat_mul=multiply,
                yaw_from_quat=geo['yaw_from_quat'])['SoccerStateCommand']
     c = cls.__new__(cls); c.num_envs = 1; c.device = 'cpu'
@@ -84,6 +95,7 @@ def command():
     c.base_pos_buffer = torch.zeros(1,50,3); c.buffer_count = torch.zeros(1,dtype=torch.long); c.buffer_idx = c.buffer_count.clone()
     c.goal_cnt = c.buffer_count.clone(); c.goal_scored_now = torch.zeros(1,dtype=torch.bool)
     c.goal_success_now = torch.zeros(1,dtype=torch.bool); c.last_ball_in_goal = c.goal_scored_now.clone()
+    c.ball_in_goal_now = torch.zeros(1,dtype=torch.bool)
     c.last_root_vel = torch.zeros(1,6); c.last_actions = torch.zeros(1,2); c.base_mass_scaled = torch.zeros(1,4)
     c.metrics = {'goal': torch.zeros(1), 'success': torch.zeros(1)}
     c._compute_amp_obs = lambda:torch.zeros(1,39)

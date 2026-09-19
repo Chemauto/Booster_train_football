@@ -303,15 +303,53 @@ class RewardCfg:
     # At -100 this costs 2/step after just 1 s: even maximum AMP (0.6)
     # plus survival (0.06) cannot offset it. Dying quickly beats balancing.
     # Keep standing viable while approach/style rewards favor locomotion.
-    # paper Table 4 "Stagnation -100" AND its parameters from T1.yaml
-    # (penalize_pos 0.7): the function default had drifted to 0.1 -- a 7x
-    # tighter "stationary" radius that silently gutted the term (same
-    # surface-vs-effective-path trap as grad_pen). Params are now explicit.
+    # paper Table 4 "Stagnation -100"; weight kept, but penalize_pos is NOT the
+    # paper's 0.7. That value is T1's: it demands a net displacement of 0.7 m per
+    # second, while this robot's measured walking speed is 0.623 m/s
+    # (env/planar_speed_mps at arm D). The term was therefore unsatisfiable --
+    # permanent -2/step pressure to hurry beyond what the gait can do, which is
+    # what a 24% first-episode fall rate at a mean 3.3 s (i.e. during the reset
+    # transient, where the rolling training fall rate is only 1%) looks like.
+    # 0.45 m/s sits below the achieved speed with margin while still being far
+    # above standing still. Same surface-vs-effective trap the earlier note
+    # describes, one layer deeper: the parameter is only meaningful relative to
+    # the robot that has to satisfy it.
+    # penalize_pos_distance is the ball-exemption radius: inside it the
+    # anti-freeze penalty does not fire. At 1.0 m it drew a "parking space" --
+    # a physics probe of model_3000 found the policy's end state 0.61 m from the
+    # ball, stationary (0.009 m/s), i.e. exactly inside the exempt ring, where it
+    # pays no freeze penalty and collects survival while never touching the ball
+    # (contact proxies 1/64 in that 4-stage run). 0.3 m keeps the legitimate
+    # "arrive, then hold balance to kick" solution -- that is contact range --
+    # while making a stop 0.6 m short cost the full -2/step again.
     pos_still = RewTerm(
         func=mdp.pos_still,
         weight=-100.0,
-        params={"penalize_pos": 0.7, "penalize_yaw": 1.0, "penalize_pos_distance": 1.0},
+        params={"penalize_pos": 0.45, "penalize_yaw": 1.0, "penalize_pos_distance": 0.3},
     )
+    # Default 0.0 = off, so every existing run and dataset comparison is
+    # unchanged. Turn it on (e.g. -100.0, matching pos_still's scale) to give the
+    # field edge a gradient: the out-of-field termination is a 0/1 cliff and the
+    # goal line is the field edge, so without this the safe way to push the ball
+    # toward the goal is not to push it at all. guard=0.3 keeps the scoring
+    # approach itself unpenalized -- see the function's docstring.
+    boundary = RewTerm(func=mdp.boundary_distance, weight=0.0, params={"guard": 0.3})
+    # Velocity-shaped edge term: charges only outward motion near the line, so the
+    # scoring push (which must happen within ~0.3 m of it) stays free. Default 0.
+    boundary_outward = RewTerm(func=mdp.boundary_outward_speed, weight=0.0, params={"guard": 0.6})
+    # Charge the sideways component of the ball's speed while a foot is on it, near
+    # the goal. Default 0 = off; enable with --ball_lateral_weight.
+    #
+    # Calibrated against a measurement, not a guess. At iteration 6800 the wide
+    # misses left the foot at 1.185 m/s of lateral ball speed against 0.764 m/s for
+    # the goals (1.55x), and 30 of 40 crossed only ~0.2 m outside the post -- the
+    # mechanism is a slightly sideways push, and the misses are marginal. The
+    # competing incentive is side_kick_ball (+20, logs +0.19 per step) which pays
+    # for lateral sweeps and nothing charged the resulting sideways ball motion;
+    # at weight -10 this term logged only -0.024, i.e. it was inert. near_goal=5.0
+    # covers the contacts that launch a shot, not just those at the line.
+    ball_lateral = RewTerm(func=mdp.ball_lateral_speed, weight=0.0, params={"near_goal": 5.0})
+
     kick_ball = RewTerm(func=mdp.kick_ball, weight=-20.0)
     side_kick_ball = RewTerm(func=mdp.side_kick_ball, weight=20.0)
     face_ball_pitch = RewTerm(func=mdp.face_ball_pitch, weight=-0.5)
@@ -354,6 +392,20 @@ def robot_out_of_field(env) -> bool:
     )
 
 
+def ball_scored_goal(env) -> bool:
+    """Episode success: the ball is in the goal (same geometry as the evaluation).
+
+    Measured before this existed, at arm G: 137 of 256 accepted goals and 95% of
+    them ended with the robot out of field, because the episode kept running
+    after the ball crossed and the robot followed it over the line. GOAL_X equals
+    FIELD_HALF_LENGTH, so the out-of-field bar and the goal bar cannot both be
+    met while a scored episode continues.
+    """
+    # The command caches this before its ball-only teleport, so a goal is not lost
+    # to the reset that the goal itself triggers.
+    return env.command_manager.get_term("soccer").ball_in_goal_now
+
+
 def base_height_low(env) -> bool:
     """Fallen: trunk below 0.35 m (K1 standing ~0.57, deep crouch ~0.43)."""
     return env.scene["robot"].data.root_pos_w[:, 2] < 0.35
@@ -367,6 +419,10 @@ def base_vel_high(env) -> bool:
 @configclass
 class TerminationCfg:
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
+    # Scoring ends the episode. Deliberately NOT time_out=True: the evaluation
+    # reads the cause list to label episodes, and mdp.termination excludes this
+    # cause so the success costs no penalty (see the reward's docstring).
+    goal = DoneTerm(func=ball_scored_goal)
     out_of_field = DoneTerm(func=robot_out_of_field)
     base_contact = DoneTerm(func=base_height_low)
     high_velocity = DoneTerm(func=base_vel_high)
@@ -440,7 +496,7 @@ class KickAmpEnvCfg(ManagerBasedRLEnvCfg):
                 "face_ball_yaw", "root_acc", "action_rate", "head_action_rate",
                 "dof_pos_limits", "collision", "feet_min_distance",
                 "track_lin_vel_ball", "feet_air_time_biped", "feet_clearance",
-                "feet_slide",
+                "feet_slide", "boundary", "boundary_outward", "ball_lateral",
             ):
                 getattr(self.rewards, _name).weight = 0.0
 
