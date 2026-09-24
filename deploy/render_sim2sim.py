@@ -114,6 +114,7 @@ def main():
     ap.add_argument("--seed", type=int, default=128)
     ap.add_argument("--steps", type=int, default=1500)
     ap.add_argument("--foot-collision", choices=("box", "mesh"), default="box")
+    ap.add_argument("--perception", choices=("perfect", "virtual"), default="perfect")
     ap.add_argument("--checkpoint", default="kick_amp_it7200_policy.pt")
     ap.add_argument("--every", type=int, default=2,
                     help="record every N policy steps (2 -> 25 fps of sim)")
@@ -123,6 +124,7 @@ def main():
     cfg = KickAmpControllerCfg()
     cfg.policy.checkpoint_path = f"models/{args.checkpoint}"
     cfg.foot_collision = args.foot_collision
+    cfg.policy.perception = args.perception
     controller = KickAmpMujocoController(cfg)
     controller.start()
     yaws, ball_xys = scenario_layout(args.episodes, args.seed)
@@ -132,7 +134,7 @@ def main():
             controller, yaws[ep], ball_xys[ep],
             seed=args.seed * 1000 + ep,
             frames_every=args.every, max_steps=args.steps)
-        base = f"{args.out}_{args.foot_collision}_ep{ep + 1:02d}_{outcome}"
+        base = f"{args.out}_{args.foot_collision}_{args.perception}_ep{ep + 1:02d}_{outcome}"
         write_mp4(frames, f"{base}.mp4", fps=int(50 / args.every))
         for k, img in keys.items():
             write_png(img, f"{base}_key{k:04d}.png")
