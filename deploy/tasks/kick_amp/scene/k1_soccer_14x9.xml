@@ -245,7 +245,7 @@
                   <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.75294 0.75294 0.75294 1.0" mesh="Left_Foot"/>
                   <geom name="left_foot_box" type="box" pos="0.026 0 -0.02" size="0.09 0.035 0.018" rgba="0.75294 0.75294 0.75294 0.0"/>
                   <geom name="left_foot_mesh_col" type="mesh" mesh="Left_Foot" density="0"
-                        contype="0" conaffinity="0" group="3" rgba="0 0 0 0"/>
+                        contype="1" conaffinity="1" group="3" rgba="0 0 0 0"/>
                 </body>
               </body>
             </body>
@@ -282,7 +282,7 @@
                   <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.75294 0.75294 0.75294 1.0" mesh="Right_Foot"/>
                   <geom name="right_foot_box" type="box" pos="0.026 0 -0.02" size="0.09 0.035 0.018" rgba="0.75294 0.75294 0.75294 0.0"/>
                   <geom name="right_foot_mesh_col" type="mesh" mesh="Right_Foot" density="0"
-                        contype="0" conaffinity="0" group="3" rgba="0 0 0 0"/>
+                        contype="1" conaffinity="1" group="3" rgba="0 0 0 0"/>
                 </body>
               </body>
             </body>

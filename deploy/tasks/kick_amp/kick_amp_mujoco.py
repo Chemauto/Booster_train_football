@@ -185,22 +185,25 @@ class KickAmpMujocoController(MujocoController):
         self._write_spawn(0.0, np.zeros(2))
 
     def _set_foot_collision(self, mode: str) -> None:
+        """Select which foot collision geom is live.
+
+        Both geoms MUST be compiled with contype/conaffinity != 0: MuJoCo folds
+        geom contype into body_contype at compile time and uses body_contype in
+        the broadphase. A geom compiled with contype=0 is invisible to collision
+        even if geom_contype is flipped on later (body_contype stays 0). So the
+        unused variant is disabled at runtime (geom_contype=0), not at compile.
+        """
         if mode not in ("box", "mesh"):
             raise ValueError(f"foot_collision must be 'box' or 'mesh', got {mode!r}")
-        if mode == "box":
-            names_on, names_off = (
-                ("left_foot_box", "right_foot_box"),
-                ("left_foot_mesh_col", "right_foot_mesh_col"),
-            )
-        else:
-            names_on, names_off = (
-                ("left_foot_mesh_col", "right_foot_mesh_col"),
-                ("left_foot_box", "right_foot_box"),
-            )
-        for name, on in [(n, True) for n in names_on] + [(n, False) for n in names_off]:
+        names = ("left_foot_box", "right_foot_box",
+                 "left_foot_mesh_col", "right_foot_mesh_col")
+        live = ("left_foot_box", "right_foot_box") if mode == "box" else (
+            "left_foot_mesh_col", "right_foot_mesh_col")
+        for name in names:
             g = mujoco.mj_name2id(self.mj_model, mujoco.mjtObj.mjOBJ_GEOM, name)
             if g < 0:
                 raise KeyError(f"geom '{name}' missing from scene xml")
+            on = name in live
             self.mj_model.geom_contype[g] = 1 if on else 0
             self.mj_model.geom_conaffinity[g] = 1 if on else 0
         self.foot_collision = mode

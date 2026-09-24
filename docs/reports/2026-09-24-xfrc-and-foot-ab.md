@@ -117,7 +117,29 @@ A = 当前 flat box；B = `Left_Foot.STL` / `Right_Foot.STL` convex hull（URDF 
 
 结果 JSON：`/tmp/kick_amp_footAB_e128_seed128_{box,mesh}.json`
 
-### 4.1 具体问题：mesh 模式下脚没有地面接触
+### 4.1 具体问题：mesh 模式下脚没有地面接触（已修复，根因是 `body_contype`）
+
+> **根因（已定位并修复）**：MuJoCo 在**编译期**把 geom 的 `contype/conaffinity` 折叠进
+> `body_contype/body_conaffinity`，broadphase 先看 **body** 级开关。XML 里
+> `left_foot_mesh_col` 写了 `contype="0"`，于是 ankle body 的 `body_contype=0`，
+> **整个 body 被排除出碰撞**；运行时把 `geom_contype` 改回 1 **不会**更新
+> `body_contype`，mesh 对地面永远不产生接触。
+>
+> 最小对照（单 mesh + plane，40 步）：
+>
+> | 模式 | body_contype | 接触 |
+> |---|---|---|
+> | 编译 `contype=1` | 1 | `floor\|mcol` ✅ |
+> | 编译 `contype=0`，运行时改 1 | **0** | **无** ❌ |
+> | 编译两个都开，运行时关掉不用的那个 | 1 | 只剩选用的那个 ✅ |
+>
+> **修复**：两种脚 geom 都以 `contype=1 conaffinity=1` 编译，A/B 切换改为
+> 运行时把**不用的那个** `geom_contype=0`（关闭是每步生效的，打开不是）。
+> 修复后站姿冒烟：`field|left_foot_mesh_col` / `field|right_foot_mesh_col` 均出现，
+> `trunk_z 0.550 → 0.530`，不再自由落体。
+>
+> 提交：`deploy: compile both foot collision geoms; runtime-select via geom_contype`
+
 
 场景级诊断（spawn 后 `mj_forward`，ball 摆在原点仅作对照）：
 
@@ -157,43 +179,52 @@ world AABB（spawn）：
 | `left_foot_box` | **[-0.0017, +0.0573]**（sole 略入地，正常） |
 | `left_foot_mesh_col` | **[+0.0025, +0.0802]**（sole 浮在地面上方，且包到 +8 cm） |
 
-两点差异：
-1. **mesh hull 的 sole 比 box 高约 4 mm**，spawn 时悬空；
-2. **hull 把整只脚包到 z≈+8 cm**（box 只有 3.6 cm 厚的 sole plate），再加上 convex hull
-   会填平脚底凹陷（`Left_Foot.STL` 底面并非平面：z∈[-0.038,-0.034) 仍有大量顶点），
-   着地截面变成弧面/楔形。
+上述 mesh 浮空/无接触是 `body_contype=0` 的**症状**，不是几何本身的问题
+（编译期打开后，同一 `Left_Foot.STL` hull 能正常 `floor|mcol` 接触）。
+几何上仍有差异，但那是修复后的 A/B 要量的东西，不是"站不住"的原因：
 
-> 注：最小复现脚本（单 mesh + plane）因 `density=0` 的 body 无惯性而未能单独编译
-> （`mass and inertia of moving bodies must be larger than mjMINVAL`）；
-> 上述结论以**真实场景诊断**为准。尚未排除的一个次要假设是"运行时才打开 contype 的
-> mesh 未参与 broadphase"，但 box 用同一开关路径却有接触，故主因仍是几何/接触本身。
+1. mesh hull 的 sole 比 box 低/高约 4 mm 量级（`mesh_pos/mesh_quat` 被 MuJoCo 主轴对齐过）；
+2. hull 把整只脚包到 z≈+8 cm（box 只有 3.6 cm 厚 sole plate），convex hull 会填平
+   脚底凹陷（`Left_Foot.STL` 底面并非平面），着地截面更接近弧面/楔形。
 
-### 4.2 结论修正：原假设的"脚几何 ⭐⭐⭐⭐⭐"要拆成两半
+box 之所以"碰巧"有接触：`left_foot_box` 在 XML 里**默认 `contype=1`**，
+ankle body 的 `body_contype` 由它撑起来；mesh 模式把 box 关掉、mesh 打开，
+body 级仍在，但 mesh geom 在编译期是关的 → 依旧无接触。这是 A/B 开关路径的 bug，
+不是 MuJoCo mesh-plane 接触本身不可用。
 
-- ✅ **敏感度成立**：只换碰撞几何，摔倒 22.7% ↔ 96.9%，存活 10.2 s ↔ 2.7 s。
-  脚接触几何确实是第一敏感项。
-- ❌ **"换成 STL hull 就能对齐 Isaac"不成立**：在 MuJoCo 里这样换会**灾难性变差**，
-  因为它根本站不住。IsaacSim/PhysX 的 convex mesh 接触 ≠ MuJoCo 的 mesh convex hull 接触。
+### 4.2 结论修正（A/B 数字在开关修复后作废，需重跑）
+
+- ⚠️ **4 节的 22.7% ↔ 96.9% 对比是开关 bug 下的伪结果**：mesh 组不是"接触更差"，
+  而是**根本没接触**。该组数字只能证明开关有 bug，**不能**用来给脚几何排序。
+- ✅ 脚几何仍是高敏感候选（box sole 平面 vs hull 填平凹陷），但**必须在开关修复后
+  重跑 A/B** 才能定量。
+- ❌ 同样不能据此说"STL hull 不如 box"。
 
 ## 五、当前原因排序（修订）
 
 | # | 原因 | 证据 | 权重 |
 |---|---|---|---|
-| ① | **脚-地接触模型**（box 可用 / STL hull 无接触） | A/B 22.7%↔96.9%；mesh 无 `field↔foot` contact | ⭐⭐⭐⭐⭐ |
+| ① | **脚-地接触模型**（box vs STL hull，待重测） | 开关 bug 修复前无法定量；几何差真实存在 | ⭐⭐⭐⭐⭐ |
 | ② | friction / contact solver（MuJoCo 1.0 vs 训练材质；solref 0.001） | 未扫 | ⭐⭐⭐⭐ |
 | ③ | checkpoint 缺 physics DR（0% 摔是 in-distribution） | it6400 0 fall 仅在 nominal PhysX | ⭐⭐⭐⭐ |
 | ④ | 踢球接触瞬间稳定性（after_touch 17/29） | fall 统计 | ⭐⭐⭐ |
 | ⑤ | 踝并联用串联铰链近似 | 结构性 | ⭐⭐ |
 | ⑥ | observation / 控制接口 | 本轮复核通过 | ⭐ |
 
+已修复（不再是原因）：`xfrc_applied` 力/矩写反；foot A/B 开关的 `body_contype` 编译期问题。
+
 ## 六、下一步（按性价比）
 
-1. **修 mesh 脚-地接触**（若仍想对齐 URDF）：
-   - 用 `Left_Foot_Collision.STL`（60 三角简化壳，脚底更平）代替 45k 三角 `Left_Foot.STL`；
-   - 或改成 **sole 薄片 box + 圆角胶囊**（保留 box 的平底，补边缘过渡）；
-   - 排查 hull 与 shank/knee 的自碰撞；
-   - 确认运行时 contype 开关是否影响 broadphase（对照：XML 里直接 `contype=1` 编译）。
-2. **在 box 上扫 friction 0.5 / 0.7 / 1.0 + solref** —— 打剩下 22.7% 摔倒的主路径。
+1. **重跑 Foot A/B**（开关已修，128 回合 / seed 128）—— 之前的 mesh 组作废：
+   ```bash
+   python3 deploy/sim2sim_kick_amp.py --episodes 128 --seed 128 \
+       --checkpoint kick_amp_it7200_policy.pt --foot-collision box
+   python3 deploy/sim2sim_kick_amp.py --episodes 128 --seed 128 \
+       --checkpoint kick_amp_it7200_policy.pt --foot-collision mesh
+   ```
+2. 可加第三档 **`Left_Foot_Collision.STL`**（60 三角简化壳，脚底更平）或
+   **sole 薄片 + 圆角胶囊**，与 box / full STL 并列。
+3. **在 box 上扫 friction 0.5 / 0.7 / 1.0 + solref** —— 打剩余摔倒的主路径。
 3. **after_touch 专题**：17/29 触球后失稳，需要看踢球瞬间的支撑脚 CoP / 角动量
    （`--view` 回放 seed 128 中 `fall_phase=after_touch` 的回合）。
 4. **训练侧**：用默认 profile（虚拟感知 + DR）续训，提升鲁棒性；
@@ -206,7 +237,7 @@ world AABB（spawn）：
 
 | 文件 | 改动 |
 |---|---|
-| `deploy/tasks/kick_amp/kick_amp_mujoco.py` | xfrc 力/矩修复；`_set_foot_collision` A/B 开关；`ball_robot_in_contact`；fall before/after 统计 |
+| `deploy/tasks/kick_amp/kick_amp_mujoco.py` | xfrc 力/矩修复；`_set_foot_collision` A/B 开关（后修：两 geom 编译期全开、运行时关掉不用的那个）；`ball_robot_in_contact`；fall before/after 统计 |
 | `deploy/tasks/kick_amp/scene/k1_soccer_14x9.xml` | 脚 box 命名 + 增加 `*_foot_mesh_col`（默认关闭） |
 | `deploy/tasks/kick_amp/__init__.py` | `foot_collision: str = "box"` |
 | `deploy/sim2sim_kick_amp.py` | `--foot-collision box\|mesh`；输出文件名带 A/B 标签 |
