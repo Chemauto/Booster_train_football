@@ -24,7 +24,7 @@
        goal mouth |y| < 1.3 at x = +7, ball r = 0.11 m, m = 0.43 kg. -->
 
   <compiler angle="radian"
-             meshdir="/data/rl_robot/BoosterRobotics/booster_assets/robots/K1/meshes"
+             meshdir="../../../../assets/robots/K1/meshes"
              autolimits="true"/>
   <option timestep="0.002" gravity="0 0 -9.81" impratio="10" solver="Newton" tolerance="1e-6"/>
   <default>
@@ -41,12 +41,12 @@
     <texture type="skybox" name="sky" builtin="gradient"
              rgb1="0.72 0.78 0.85" rgb2="0.95 0.96 0.97" width="512" height="512"/>
     <texture type="2d" name="grass_tex"
-             file="/data/rl_robot/BoosterRobotics/booster_assets/scene/grass_14x9.png"/>
+             file="../../../../assets/scene/grass_14x9.png"/>
     <material name="grass_mat" texture="grass_tex" texuniform="true"
               texrepeat="0.125 0.189" specular="0.1" shininess="0.15"
               reflectance="0.02"/>
-    <mesh name="goal_mesh" file="/data/rl_robot/BoosterRobotics/booster_assets/scene/goal.stl"/>
-    <mesh name="ball_mesh" file="/data/rl_robot/BoosterRobotics/booster_assets/scene/footaball.stl"
+    <mesh name="goal_mesh" file="../../../../assets/scene/goal.stl"/>
+    <mesh name="ball_mesh" file="../../../../assets/scene/footaball.stl"
           scale="0.18514 0.18514 0.18514"/>
 
     <!-- K1 meshes (verbatim from robots/K1/K1_22dof.xml, relative to meshdir) -->

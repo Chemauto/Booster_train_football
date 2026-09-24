@@ -22,7 +22,7 @@ sys.path.insert(1, _BOOSTER_DEPLOY)
 try:
     import booster_assets  # noqa: F401
 except ModuleNotFoundError:
-    sys.path.insert(2, "/data/rl_robot/BoosterRobotics/booster_assets/src")
+    sys.path.insert(2, os.path.join(_DEPLOY_DIR, "..", "assets"))
 
 import mujoco  # noqa: E402
 import numpy as np  # noqa: E402

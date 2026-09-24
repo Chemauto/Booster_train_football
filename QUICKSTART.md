@@ -8,8 +8,8 @@ K1 人形机器人**自主走向足球、把球踢进 7 m 外球门**（论文 2
 
 > 下文 `python` 请替换为你装了 Isaac Lab 的解释器（本机是
 > `/home/xcj/miniconda3/envs/env_isaaclab/bin/python`）。
-> `$ASSETS` = `/data/rl_robot/BoosterRobotics/booster_assets`。
-> 前置安装（Isaac Lab / booster_assets / `pip install -e source/booster_train`）见 [README](README.md)。
+> `$ASSETS` = **本仓库自带的 `assets/`**（K1 模型 + AMP 动作 + 球场，见 [assets/README.md](assets/README.md)）。
+> 不需要单独克隆 `booster_assets`。前置安装（Isaac Lab / `pip install -e source/booster_train`）见 [README](README.md)。
 
 ---
 

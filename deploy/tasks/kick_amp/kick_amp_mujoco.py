@@ -38,7 +38,7 @@ import torch
 try:
     import booster_assets  # noqa: F401
 except ModuleNotFoundError:
-    sys.path.insert(0, "/data/rl_robot/BoosterRobotics/booster_assets/src")
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "assets"))
 
 from booster_deploy.controllers.base_controller import BaseController
 from booster_deploy.controllers.mujoco_controller import MujocoController

@@ -62,33 +62,33 @@
 
 ```text
 Isaac Lab 2.2 + Isaac Sim 5.0        # README 推荐 conda 装法
-booster_train/                       # 本仓库
-booster_assets/                      # 机器人模型 + motions
-  └── motions/K1/amp_paper_waistfix/ # 12 walk + 12 kick npz（必须）
+Booster_train_football/              # 本仓库 = 全部所需（K1 模型 + AMP + 球场已内置）
 ```
 
-安装（README 同款）：
+**`$ASSETS` = 本仓库的 `assets/`**（自 2026-09-24 起自带，见 `assets/README.md`），
+**不需要**再克隆 `booster_assets`。
+
+安装：
 
 ```bash
 # 1) IsaacLab（略，见官方安装指南）
-# 2) 本仓库
-git clone https://github.com/Chemauto/Booster_train_football.git booster_train
-cd booster_train && git log --oneline -1   # 应看到 ddb1572 或更新
+# 2) 本仓库（一个仓库搞定）
+git clone https://github.com/Chemauto/Booster_train_football.git
+cd Booster_train_football
+git log --oneline -1                 # 应看到 3c21feb 或更新
 
-# 3) booster_assets
-git clone https://github.com/BoosterRobotics/booster_assets.git
-# 按 booster_assets 说明装 python helper
-
-# 4) 本任务包（用装了 IsaacLab 的解释器）
+# 3) 本任务包（用装了 IsaacLab 的解释器）
 python -m pip install -e source/booster_train
 
-# 5) AMP 数据（已有则跳过）
-python scripts/convert_paper_data.py --out $ASSETS/motions/K1/amp_paper_waistfix
+# 4) 定义 ASSETS
+export ASSETS=$PWD/assets
 ```
 
 冒烟：
 
 ```bash
+python -c "import sys; sys.path.insert(0,'assets'); import booster_assets; print(booster_assets.BOOSTER_ASSETS_DIR)"
+ls $ASSETS/motions/K1/amp_paper_waistfix/walk | wc -l   # 12
 python scripts/list_envs.py | grep KickAMP
 python -m pytest tests/ -q          # 期望全绿
 ```

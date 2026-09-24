@@ -21,7 +21,9 @@ from scipy.spatial.transform import Rotation, Slerp
 from amp_data_build import EXCLUDE, LAFAN_DIR, SOCCER_DIRS, motion_source_files
 from g1_to_k1_csv import G1_JOINT_NAMES, K1_JOINT_NAMES, K1_JOINT_LIMITS, G1_TO_K1_MAP, npz_joint_names, retarget_g1_to_k1
 
-ASSETS = Path('/data/rl_robot/BoosterRobotics/booster_assets')
+ASSETS = Path(__file__).resolve().parents[1] / 'assets'
+if not (ASSETS / 'robots').is_dir():
+    ASSETS = Path('/data/rl_robot/BoosterRobotics/booster_assets')
 SOLE = np.array([[0.1195, 0.04, -0.038], [0.1195, -0.04, -0.038],
                  [-0.066, 0.04, -0.038], [-0.066, -0.04, -0.038]])
 FEET = ['left_ankle_roll_link', 'right_ankle_roll_link']
