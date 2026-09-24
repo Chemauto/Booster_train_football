@@ -42,7 +42,7 @@ def main():
     parser.add_argument("--seed", type=int, default=123)
     parser.add_argument("--steps", type=int, default=1500,
                         help="max policy steps per episode (1500 = 30 s)")
-    parser.add_argument("--perception", choices=("perfect", "virtual"),
+    parser.add_argument("--perception", choices=("perfect", "virtual", "yolo"),
                         default="perfect")
     parser.add_argument("--delay-substeps", type=int, default=5,
                         help="actuator target delay in 2 ms substeps "

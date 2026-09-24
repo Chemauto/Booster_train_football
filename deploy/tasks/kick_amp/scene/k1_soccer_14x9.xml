@@ -166,6 +166,10 @@
           <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.75294 0.75294 0.75294 1" mesh="Head_2"/>
           <geom type="mesh" rgba="0.75294 0.75294 0.75294 1" mesh="Head_2"/>
           <body name="head_realsense_rgb_link" pos="0.053617 -0.0115 0.10231" quat="0.42967577 -0.56158605 0.56158587 -0.42967563"/>
+          <!-- head depth camera: training CAMERA_OFFSET_B=(0.054,0,0.102), FOV_V=58deg
+               (FOV_H~89deg at 16:9 ~= training 87). MuJoCo cam looks along -z; quat maps
+               cam_x=head -y (image right), cam_y=head +z (image up), looks along head +x. -->
+          <camera name="head_cam" pos="0.054 0 0.102" quat="0.5 0.5 -0.5 -0.5" fovy="58"/>
           <body name="head_booster_stereo_rgb_link" pos="0.060138 0.0351 0.092774" quat="0.50000016 -0.5 0.49999984 -0.5"/>
         </body>
       </body>

@@ -114,7 +114,7 @@ def main():
     ap.add_argument("--seed", type=int, default=128)
     ap.add_argument("--steps", type=int, default=1500)
     ap.add_argument("--foot-collision", choices=("box", "mesh"), default="box")
-    ap.add_argument("--perception", choices=("perfect", "virtual"), default="perfect")
+    ap.add_argument("--perception", choices=("perfect", "virtual", "yolo"), default="perfect")
     ap.add_argument("--checkpoint", default="kick_amp_it7200_policy.pt")
     ap.add_argument("--every", type=int, default=2,
                     help="record every N policy steps (2 -> 25 fps of sim)")

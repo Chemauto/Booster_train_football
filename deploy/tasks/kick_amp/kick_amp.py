@@ -157,6 +157,27 @@ class VirtualBallPerception:
         return torch.from_numpy(self.buffer[self.delay_steps, :].copy())
 
 
+def _head_cam_pose_fn(controller):
+    """Camera pose from the head link, same math as training (commands.py:353-355)."""
+    def pose():
+        st = controller
+        head_pos = st.head_pos_w.numpy().astype(np.float64).reshape(3)
+        head_quat = st.head_quat_w.numpy().astype(np.float64).reshape(4)  # wxyz
+        w, x, y, z = head_quat
+        Rh = np.array([
+            [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+            [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+        ])
+        pos = head_pos + Rh @ np.asarray(CAMERA_OFFSET_B, dtype=np.float64)
+        # MuJoCo camera axes in head frame: x=-y_h, y=+z_h, z=-x_h
+        R_cam_in_head = np.array([[0.0, 0.0, -1.0],
+                                  [-1.0, 0.0, 0.0],
+                                  [0.0, 1.0, 0.0]])
+        return pos, Rh @ R_cam_in_head
+    return pose
+
+
 class KickAmpPolicy(Policy):
     """79-dim obs + 50-frame normalized history stack -> 22 joint targets."""
 
@@ -187,11 +208,37 @@ class KickAmpPolicy(Policy):
             VirtualBallPerception(self._episode_rng)
             if cfg.perception == "virtual" else None
         )
+        self.yolo = None
+        self._yolo_pending = cfg.perception == "yolo"
+
+    def _ensure_yolo(self):
+        """Build the RGB-D + YOLO stack lazily: the mujoco controller only has
+        mj_model after BaseController.__init__ constructed this policy."""
+        if not self._yolo_pending:
+            return
+        self._yolo_pending = False
+        cfg = self.cfg
+        controller = self.controller
+        from .yolo_ball_perception import (
+            MujocoRgbdSource, YoloBallDetector, YoloBallPerception,
+        )
+        if getattr(controller, "mj_model", None) is not None:
+            src = MujocoRgbdSource(
+                controller.mj_model, controller.mj_data,
+                width=cfg.yolo_width, height=cfg.yolo_height)
+        else:
+            from .yolo_ball_perception import Ros2RgbdSource
+            src = Ros2RgbdSource(
+                pose_fn=cfg.yolo_pose_fn or _head_cam_pose_fn(controller))
+        self.yolo = YoloBallPerception(
+            src, YoloBallDetector(conf=cfg.yolo_conf),
+            refresh_every=cfg.yolo_refresh_every,
+            delay_steps=cfg.yolo_delay_steps)
 
     def set_episode_seed(self, seed: int):
         """Seed the perception RNG for this episode (deterministic reruns)."""
         self._episode_rng = np.random.default_rng(seed)
-        if self.perception is not None:
+        if self.perception is not None and hasattr(self.perception, "rng"):
             self.perception.rng = self._episode_rng
 
     def reset(self) -> None:
@@ -199,10 +246,14 @@ class KickAmpPolicy(Policy):
         self.stack.zero_()
         self.last_action.zero_()
         self._inference_count = 0
+        self._ensure_yolo()
         if self.perception is not None:
             self.perception.reset()
+        if self.yolo is not None:
+            self.yolo.reset()
 
     def compute_observation(self) -> torch.Tensor:
+        self._ensure_yolo()
         st = self.controller          # soccer state provider (mujoco controller)
         rd = self.robot.data
         dev = self.device
@@ -222,7 +273,12 @@ class KickAmpPolicy(Policy):
         rel_goal = rotate_to_yaw_frame(
             torch.tensor([GOAL_X, 0.0], device=dev) - base_xy, base_yaw)
 
-        if self.perception is not None:
+        if self.yolo is not None:
+            ball_obs = torch.from_numpy(
+                self.yolo.update(base_xy.detach().cpu().numpy(),
+                                 float(base_yaw))
+            ).to(dev)
+        elif self.perception is not None:
             head_quat = st.head_quat_w.to(dev).reshape(1, 4)
             # camera optical center = head origin + offset in head frame
             # (training commands.py:353-355)
@@ -289,5 +345,11 @@ class KickAmpPolicyCfg(PolicyCfg):
     # "perfect": ground-truth ball + flag 1 (how both surviving checkpoints
     # were trained and evaluated). "virtual": the noisy/delayed/dropout
     # perception port above, for checkpoints retrained with it.
-    perception: str = "perfect"
+    perception: str = "perfect"   # "perfect" | "virtual" | "yolo"
     num_stack: int = 50
+    yolo_conf: float = 0.25
+    yolo_width: int = 640
+    yolo_height: int = 360
+    yolo_refresh_every: int = 2   # 25 Hz, matches training virtual perception
+    yolo_delay_steps: int = 0
+    yolo_pose_fn: object = None   # () -> (pos_w, R_mj) for the ROS2 source
