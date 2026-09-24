@@ -246,7 +246,7 @@ class YoloBallDetector:
         local = str(repo / "assets" / "models" / weights)
         return local if os.path.isfile(local) else weights
 
-    def __init__(self, weights: str = "yolov8s.pt", conf: float = 0.25, imgsz: int = 640,
+    def __init__(self, weights: str = "yolov8s.pt", conf: float = 0.15, imgsz: int = 640,
                  device: str | None = None):
         import torch
         from ultralytics import YOLO
@@ -268,7 +268,9 @@ class YoloBallDetector:
 
     def detect(self, rgb: np.ndarray) -> list[dict]:
         """Return [{'xyxy': (x1,y1,x2,y2), 'conf': float, 'name': str}] for ball hits."""
-        res = self.model.predict(rgb, conf=self.conf, imgsz=self.imgsz,
+        # ultralytics/opencv convention is BGR (same as mujoco-yolo-camera detector)
+        bgr = np.ascontiguousarray(rgb[..., ::-1])
+        res = self.model.predict(bgr, conf=self.conf, imgsz=self.imgsz,
                                  verbose=False, device=self.device)[0]
         out = []
         for b in res.boxes:
@@ -333,6 +335,7 @@ class YoloBallPerception:
             return np.zeros(3, dtype=np.float32)
         dets = self.detector.detect(frame.rgb)
         self.last_det = dets
+        self.last_conf = dets[0]["conf"] if dets else 0.0
         if not dets:
             self.last_xyz_w = None
             return np.zeros(3, dtype=np.float32)

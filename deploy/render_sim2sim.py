@@ -44,9 +44,39 @@ def follow_cam(model, data, look, dist=3.2, height=1.6, azimuth=90.0):
     return cam
 
 
+def _pip_camera_view(controller):
+    """(h, w, 3) RGB of the head camera with YOLO box + ball_obs readout."""
+    yolo = getattr(controller.policy, "yolo", None)
+    if yolo is None or yolo.last_frame is None:
+        return None
+    import cv2
+    from tasks.kick_amp.yolo_ball_perception import annotate
+    vis = annotate(yolo.last_frame.rgb, yolo.last_det)
+    obs = yolo.obs()
+    cv2.putText(vis, f"xy=({obs[0]:+.2f},{obs[1]:+.2f}) flag={obs[2]:.0f}",
+                (8, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+    return vis
+
+
+def _blend_pip(img, pip, frac=0.33, margin=10):
+    import cv2
+    h, w = img.shape[:2]
+    ph, pw = pip.shape[:2]
+    sw, sh = int(w * frac), int(ph * (w * frac) / pw)
+    small = cv2.resize(pip, (sw, sh))
+    x0, y0 = w - sw - margin, margin
+    out = img.copy()
+    out[y0:y0 + sh, x0:x0 + sw] = small
+    cv2.rectangle(out, (x0 - 2, y0 - 2), (x0 + sw + 1, y0 + sh + 1), (0, 255, 255), 2)
+    cv2.putText(out, "head_cam + YOLO", (x0, y0 + sh + 16),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1)
+    return out
+
+
 def record_episode(controller, yaw, ball_xy, seed, frames_every=2, max_steps=1500):
     controller.reset_episode(float(yaw), ball_xy, seed=seed)
     renderer = mujoco.Renderer(controller.mj_model, height=540, width=960)
+    want_pip = getattr(controller.policy.cfg, "perception", "") == "yolo"
     frames = []
     keys = {}
     outcome, info = None, {}
@@ -66,6 +96,10 @@ def record_episode(controller, yaw, ball_xy, seed, frames_every=2, max_steps=150
             cam = follow_cam(controller.mj_model, controller.mj_data, look)
             renderer.update_scene(controller.mj_data, camera=cam)
             img = renderer.render()
+            if want_pip:
+                pip = _pip_camera_view(controller)
+                if pip is not None:
+                    img = _blend_pip(img, pip)
             frames.append(img)
             if step in (0, max_steps // 4, max_steps // 2) or (
                 outcome is not None

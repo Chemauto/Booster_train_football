@@ -169,7 +169,11 @@
           <!-- head depth camera: training CAMERA_OFFSET_B=(0.054,0,0.102), FOV_V=58deg
                (FOV_H~89deg at 16:9 ~= training 87). MuJoCo cam looks along -z; quat maps
                cam_x=head -y (image right), cam_y=head +z (image up), looks along head +x. -->
-          <camera name="head_cam" pos="0.054 0 0.102" quat="0.5 0.5 -0.5 -0.5" fovy="58"/>
+          <!-- pitched 20 deg down so ground balls at 0.8-2.0 m sit inside fovy=58.
+               A level camera at ~0.9 m height has a 29 deg half-FOV and misses the
+               spawn band (0.8 m needs 45 deg depression). Real head cameras that
+               work at the feet are mounted/pitched down the same way. -->
+          <camera name="head_cam" pos="0.054 0 0.102" quat="0.579228 0.40558 -0.40558 -0.579228" fovy="58"/>
           <body name="head_booster_stereo_rgb_link" pos="0.060138 0.0351 0.092774" quat="0.50000016 -0.5 0.49999984 -0.5"/>
         </body>
       </body>

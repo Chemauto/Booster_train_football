@@ -347,7 +347,7 @@ class KickAmpPolicyCfg(PolicyCfg):
     # perception port above, for checkpoints retrained with it.
     perception: str = "perfect"   # "perfect" | "virtual" | "yolo"
     num_stack: int = 50
-    yolo_conf: float = 0.25
+    yolo_conf: float = 0.15
     yolo_width: int = 640
     yolo_height: int = 360
     yolo_refresh_every: int = 2   # 25 Hz, matches training virtual perception
