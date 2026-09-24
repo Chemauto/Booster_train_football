@@ -109,6 +109,7 @@ class KickAmpControllerCfg(ControllerCfg):
     actuator_vknee: list = _K1_KICK_VKNEE        # T-N curve knee speeds
     ball_friction_range: tuple = (0.2, 0.2)   # eval pins rolling resistance
     push_enabled: bool = False           # training disturbance, off for eval
+    foot_collision: str = "box"          # "box" | "mesh" (Left/Right_Foot.STL convex hull)
 
     robot = K1_CFG.replace(     # type: ignore
         mjcf_path=_SCENE,

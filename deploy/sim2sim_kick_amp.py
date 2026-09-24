@@ -48,6 +48,9 @@ def main():
                         help="actuator target delay in 2 ms substeps "
                              "(default 5 = the evaluation's fixed 10 ms)")
     parser.add_argument("--push", action="store_true")
+    parser.add_argument("--foot-collision", choices=("box", "mesh"), default="box",
+                        help="foot collision geometry A/B: flat box (default) "
+                             "or Left/Right_Foot.STL convex hull")
     parser.add_argument("--realtime", action="store_true",
                         help="sleep to wall-clock pace (headless demo)")
     parser.add_argument("--view", action="store_true",
@@ -65,6 +68,7 @@ def main():
     cfg.policy.perception = args.perception
     cfg.actuator_delay_substeps = args.delay_substeps
     cfg.push_enabled = args.push
+    cfg.foot_collision = args.foot_collision
     if args.checkpoint:
         cfg.policy.checkpoint_path = f"models/{args.checkpoint}"
 
@@ -75,7 +79,7 @@ def main():
         base = base[:-3] if base.endswith(".pt") else base   # avoid .pt.json
         out = args.out or os.path.join(
             "/tmp", f"kick_amp_sim2sim_e{args.episodes}_seed{args.seed}_"
-                    f"{args.perception}_{base}.json")
+                    f"{args.perception}_{args.foot_collision}_{base}.json")
         run_sim2sim(cfg, episodes=args.episodes, seed=args.seed,
                     steps=args.steps, realtime=args.realtime, out=out)
 

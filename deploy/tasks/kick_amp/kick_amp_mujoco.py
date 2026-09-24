@@ -179,8 +179,44 @@ class KickAmpMujocoController(MujocoController):
         self._push_xy = np.zeros(2)
         self._push_torque = np.zeros(3)
         self._episode_step = 0
+        self.foot_collision = "box"
+        self._set_foot_collision(getattr(cfg, "foot_collision", "box"))
 
         self._write_spawn(0.0, np.zeros(2))
+
+    def _set_foot_collision(self, mode: str) -> None:
+        if mode not in ("box", "mesh"):
+            raise ValueError(f"foot_collision must be 'box' or 'mesh', got {mode!r}")
+        if mode == "box":
+            names_on, names_off = (
+                ("left_foot_box", "right_foot_box"),
+                ("left_foot_mesh_col", "right_foot_mesh_col"),
+            )
+        else:
+            names_on, names_off = (
+                ("left_foot_mesh_col", "right_foot_mesh_col"),
+                ("left_foot_box", "right_foot_box"),
+            )
+        for name, on in [(n, True) for n in names_on] + [(n, False) for n in names_off]:
+            g = mujoco.mj_name2id(self.mj_model, mujoco.mjtObj.mjOBJ_GEOM, name)
+            if g < 0:
+                raise KeyError(f"geom '{name}' missing from scene xml")
+            self.mj_model.geom_contype[g] = 1 if on else 0
+            self.mj_model.geom_conaffinity[g] = 1 if on else 0
+        self.foot_collision = mode
+
+    def ball_robot_in_contact(self) -> bool:
+        m, d = self.mj_model, self.mj_data
+        bb = self.ball_bid
+        for i in range(d.ncon):
+            c = d.contact[i]
+            b1 = int(m.geom_bodyid[c.geom1])
+            b2 = int(m.geom_bodyid[c.geom2])
+            if b1 == bb or b2 == bb:
+                other = b2 if b1 == bb else b1
+                if other != 0:
+                    return True
+        return False
 
     # ------------------------------------------------------------ interface
 
@@ -270,16 +306,16 @@ class KickAmpMujocoController(MujocoController):
 
         for i in range(self.decimation):
             self._substep += 1
-            # ball rolling resistance: world-frame force against ball vel
+            # xfrc_applied = [force(3), torque(3)], both world-frame
             vxy = self.mj_data.qvel[self.ball_vadr:self.ball_vadr + 2]
             speed = max(float(np.linalg.norm(vxy)), 0.1)
-            self.mj_data.xfrc_applied[self.ball_bid, 3:5] = \
+            self.mj_data.xfrc_applied[self.ball_bid, :] = 0.0
+            self.mj_data.xfrc_applied[self.ball_bid, 0:2] = \
                 -self._friction_force * vxy / speed
+            self.mj_data.xfrc_applied[self.trunk_bid, :] = 0.0
             if push_active:
-                self.mj_data.xfrc_applied[self.trunk_bid, 3:5] = self._push_xy
-                self.mj_data.xfrc_applied[self.trunk_bid, 0:3] = self._push_torque
-            else:
-                self.mj_data.xfrc_applied[self.trunk_bid, :] = 0.0
+                self.mj_data.xfrc_applied[self.trunk_bid, 0:2] = self._push_xy
+                self.mj_data.xfrc_applied[self.trunk_bid, 3:6] = self._push_torque
 
             # substep-granular actuator delay: substeps i < delay still apply
             # the previous policy step's target (IsaacLab DelayBuffer with k
@@ -367,7 +403,10 @@ def run_sim2sim(cfg, episodes: int = 32, seed: int = 123, steps: int = 1500,
         controller.reset_episode(float(yaws[ep]), ball_xys[ep], seed=seed * 1000 + ep)
         min_dist = float("inf")
         touched = False
+        ball_contact = False
+        first_contact_step = None
         outcome, info = None, {}
+        step = 0
         for step in range(steps):
             # first-terminal-event semantics: check on the current state
             outcome, info = controller.check_terminal(step, steps)
@@ -377,6 +416,9 @@ def run_sim2sim(cfg, episodes: int = 32, seed: int = 123, steps: int = 1500,
                 controller.ball_pos_w[:2] - controller.robot.data.root_pos_w[:2]))
             min_dist = min(min_dist, dist)
             touched = touched or dist < 0.30
+            if not ball_contact and controller.ball_robot_in_contact():
+                ball_contact = True
+                first_contact_step = step
             dof_targets = controller.policy_step()
             controller.ctrl_step(dof_targets)
             controller.update_state()
@@ -384,6 +426,10 @@ def run_sim2sim(cfg, episodes: int = 32, seed: int = 123, steps: int = 1500,
                 time.sleep(cfg.policy_dt)
         else:
             outcome = "timeout"
+        is_fall = outcome in ("fall", "high_velocity")
+        fall_phase = None
+        if is_fall:
+            fall_phase = "after_touch" if ball_contact else "before_touch"
         bearing = np.arctan2(ball_xys[ep][1], ball_xys[ep][0]) - yaws[ep]
         results.append({
             "episode": ep,
@@ -395,29 +441,40 @@ def run_sim2sim(cfg, episodes: int = 32, seed: int = 123, steps: int = 1500,
             "duration_s": round((step + 1) * cfg.policy_dt, 2),
             "min_ball_dist_m": round(min_dist, 3),
             "touched_ball": bool(touched),
+            "ball_contact": bool(ball_contact),
+            "first_contact_step": first_contact_step,
+            "fall_phase": fall_phase,
             **info,
         })
         if verbose:
             print(f"  ep {ep + 1:2d}/{episodes}  yaw={results[-1]['yaw_deg']:5.1f}deg "
                   f"ball@{results[-1]['ball_start']}  -> {outcome:12s} "
                   f"after {results[-1]['duration_s']:5.1f}s  "
-                  f"min_dist={min_dist:.2f}m  touch={'Y' if touched else 'N'}")
+                  f"min_dist={min_dist:.2f}m  touch={'Y' if touched else 'N'}"
+                  f"  ball_c={'Y' if ball_contact else 'N'}"
+                  + (f"  fall={fall_phase}" if fall_phase else ""))
 
     counts: dict[str, int] = {}
     for r in results:
         counts[r["outcome"]] = counts.get(r["outcome"], 0) + 1
+    fall_before = sum(1 for r in results if r.get("fall_phase") == "before_touch")
+    fall_after = sum(1 for r in results if r.get("fall_phase") == "after_touch")
     summary = {
         "episodes": episodes,
         "seed": seed,
         "steps": steps,
         "perception": cfg.policy.perception,
+        "foot_collision": getattr(cfg, "foot_collision", "box"),
         "actuator_delay_substeps": getattr(cfg, "actuator_delay_substeps", 5),
         "checkpoint": cfg.policy.checkpoint_path,
         "outcome_counts": counts,
         "goal_fraction": counts.get("goal", 0) / episodes,
         "out_fraction": counts.get("ball_out", 0) / episodes,
         "fall_fraction": (counts.get("fall", 0) + counts.get("high_velocity", 0)) / episodes,
+        "fall_before_touch": fall_before,
+        "fall_after_touch": fall_after,
         "touch_fraction": sum(r["touched_ball"] for r in results) / episodes,
+        "ball_contact_fraction": sum(r["ball_contact"] for r in results) / episodes,
         "mean_duration_s": float(np.mean([r["duration_s"] for r in results])),
         "wall_time_s": round(time.perf_counter() - t0, 1),
         "per_episode": results,
