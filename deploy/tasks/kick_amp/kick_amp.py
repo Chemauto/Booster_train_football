@@ -242,6 +242,8 @@ class KickAmpPolicy(Policy):
         self._episode_rng = np.random.default_rng(seed)
         if self.perception is not None and hasattr(self.perception, "rng"):
             self.perception.rng = self._episode_rng
+        if self.yolo is not None:
+            self.yolo.rng = self._episode_rng
 
     def reset(self) -> None:
         # runner.py:229: zero the whole stack at episode boundaries

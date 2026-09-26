@@ -175,7 +175,6 @@ class Ros2RgbdSource(RgbdSource):
 
     def spin_once(self, timeout_s: float = 0.05):
         import rclpy
-        from rclpy.spin_once import spin_once  # noqa: F401  (api guard)
         rclpy.spin_once(self._node, timeout_sec=timeout_s)
 
     def grab(self) -> RgbdFrame | None:
@@ -306,9 +305,11 @@ class YoloBallPerception:
     BUFFER_DEPTH = 20
 
     def __init__(self, source: RgbdSource, detector: YoloBallDetector | None = None,
-                 refresh_every: int = 2, delay_steps: int = 6):
+                 refresh_every: int = 2, delay_steps: int = 6,
+                 rng: np.random.Generator | None = None):
         self.source = source
         self.detector = detector or YoloBallDetector()
+        self.rng = rng if rng is not None else np.random.default_rng(0)
         self.refresh_every = max(1, int(refresh_every))
         self.delay_steps = int(np.clip(delay_steps, 0, self.BUFFER_DEPTH - 1))
         self._delay_mean = self.delay_steps
@@ -321,7 +322,7 @@ class YoloBallPerception:
     def reset(self):
         # training resamples ball_delay_steps = clip(N(6,1), 0, 19) per episode
         self.delay_steps = int(np.clip(
-            self._delay_mean + np.random.normal(0.0, 1.0), 0, self.BUFFER_DEPTH - 1))
+            self._delay_mean + self.rng.normal(0.0, 1.0), 0, self.BUFFER_DEPTH - 1))
         self.buffer[:] = 0.0
         self.step = 0
         self.last_det = []
