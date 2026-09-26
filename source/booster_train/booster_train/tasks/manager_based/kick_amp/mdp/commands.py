@@ -182,7 +182,10 @@ RESET_MOTION_MAX_FRAC = 0.5
 # and the body->optical rotation quat (wxyz) -- same convention as t1.py, which
 # post-multiplies [0.5, 0.5, 0.5, 0.5].
 CAMERA_OFFSET_B = (0.054, 0.0, 0.102)
-CAMERA_BODY_TO_OPTICAL_WXYZ = (0.5, 0.5, 0.5, 0.5)
+# Optical frame pitched 20 deg down so ground balls at the 0.8-2.0 m spawn
+# band sit inside CAMERA_FOV_V. A level frame misses d<~1.5 m (0.8 m needs
+# 46 deg depression vs a 29 deg half-FOV). Matches the deploy head_cam.
+CAMERA_BODY_TO_OPTICAL_WXYZ = (0.405580, 0.579228, 0.579228, 0.405580)
 CAMERA_FOV_H = 87.0
 CAMERA_FOV_V = 58.0
 

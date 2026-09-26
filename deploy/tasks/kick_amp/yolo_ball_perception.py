@@ -41,7 +41,12 @@ def bbox_depth_median(depth: np.ndarray, xyxy, max_range: float = 20.0) -> float
     x2, y2 = min(w, int(round(xyxy[2]))), min(h, int(round(xyxy[3])))
     if x2 <= x1 or y2 <= y1:
         return None
-    roi = depth[y1:y2, x1:x2]
+    # central 50% of the box: a full-box median drifts toward the background
+    # whenever the ball covers <50% of the bbox (measured +0.11 m at 2 m).
+    hpad, wpad = (y2 - y1) // 4, (x2 - x1) // 4
+    roi = depth[y1 + hpad:y2 - hpad, x1 + wpad:x2 - wpad]
+    if roi.size == 0:
+        roi = depth[y1:y2, x1:x2]
     roi = roi[np.isfinite(roi) & (roi > 0) & (roi < max_range)]
     if roi.size == 0:
         return None
@@ -94,7 +99,10 @@ class MujocoRgbdSource(RgbdSource):
         depth = r.render()
         r.disable_depth_rendering()
         depth = np.where(np.isfinite(depth) & (depth > 0), depth, np.inf).astype(np.float32)
-        mj.mj_camlight(self.model, self.data)  # refresh cam_xpos/cam_xmat
+        # mj_camlight alone re-derives the pose from the CURRENT xpos/xmat and
+        # does NOT run kinematics; mj_kinematics first makes grab() self-sufficient.
+        mj.mj_kinematics(self.model, self.data)
+        mj.mj_camlight(self.model, self.data)
         pos = self.data.cam_xpos[self.cam_id].copy()
         R = self.data.cam_xmat[self.cam_id].reshape(3, 3).copy()
         return RgbdFrame(rgb=rgb, depth=depth, K=self.K,
@@ -118,7 +126,7 @@ class Ros2RgbdSource(RgbdSource):
     """
 
     def __init__(self, pose_fn, color_topic: str = "/camera/color/image_raw",
-                 depth_topic: str = "/camera/depth/image_raw",
+                 depth_topic: str = "/camera/aligned_depth_to_color/image_raw",
                  info_topic: str = "/camera/color/camera_info",
                  depth_scale: float = 0.001):
         try:
@@ -298,11 +306,12 @@ class YoloBallPerception:
     BUFFER_DEPTH = 20
 
     def __init__(self, source: RgbdSource, detector: YoloBallDetector | None = None,
-                 refresh_every: int = 2, delay_steps: int = 0):
+                 refresh_every: int = 2, delay_steps: int = 6):
         self.source = source
         self.detector = detector or YoloBallDetector()
         self.refresh_every = max(1, int(refresh_every))
         self.delay_steps = int(np.clip(delay_steps, 0, self.BUFFER_DEPTH - 1))
+        self._delay_mean = self.delay_steps
         self.buffer = np.zeros((self.BUFFER_DEPTH, 3), dtype=np.float32)
         self.step = 0
         self.last_frame: RgbdFrame | None = None
@@ -310,6 +319,9 @@ class YoloBallPerception:
         self.last_xyz_w: np.ndarray | None = None
 
     def reset(self):
+        # training resamples ball_delay_steps = clip(N(6,1), 0, 19) per episode
+        self.delay_steps = int(np.clip(
+            self._delay_mean + np.random.normal(0.0, 1.0), 0, self.BUFFER_DEPTH - 1))
         self.buffer[:] = 0.0
         self.step = 0
         self.last_det = []

@@ -181,6 +181,7 @@ class KickAmpMujocoController(MujocoController):
         self._episode_step = 0
         self.foot_collision = "box"
         self._set_foot_collision(getattr(cfg, "foot_collision", "box"))
+        self._ball_contact_window = False
 
         self._write_spawn(0.0, np.zeros(2))
 
@@ -244,6 +245,7 @@ class KickAmpMujocoController(MujocoController):
         self._write_spawn(yaw, ball_xy)
         self._substep = 0
         self._episode_step = 0
+        self._ball_contact_window = False
         self._friction_force = float(np.random.uniform(*self._friction_range)) \
             if self._friction_range[0] != self._friction_range[1] \
             else self._friction_range[0]
@@ -335,6 +337,10 @@ class KickAmpMujocoController(MujocoController):
             else:
                 self.mj_data.ctrl[self.actadr] = np.clip(raw, -lim, lim)
             mujoco.mj_step(self.mj_model, self.mj_data)
+            # OR-accumulate over substeps: d.contact only holds the LAST mj_step,
+            # and foot-ball grazes are often < one 2 ms substep.
+            if not self._ball_contact_window and self.ball_robot_in_contact():
+                self._ball_contact_window = True
 
         self._prev_targets = targets
         self._first_ctrl_step = False
@@ -411,6 +417,12 @@ def run_sim2sim(cfg, episodes: int = 32, seed: int = 123, steps: int = 1500,
         outcome, info = None, {}
         step = 0
         for step in range(steps):
+            # contact from the PREVIOUS ctrl_step window (covers substep grazes
+            # and the very contacts that caused a fall this step)
+            if not ball_contact and (
+                    controller._ball_contact_window or controller.ball_robot_in_contact()):
+                ball_contact = True
+                first_contact_step = step
             # first-terminal-event semantics: check on the current state
             outcome, info = controller.check_terminal(step, steps)
             if outcome is not None:
@@ -419,9 +431,6 @@ def run_sim2sim(cfg, episodes: int = 32, seed: int = 123, steps: int = 1500,
                 controller.ball_pos_w[:2] - controller.robot.data.root_pos_w[:2]))
             min_dist = min(min_dist, dist)
             touched = touched or dist < 0.30
-            if not ball_contact and controller.ball_robot_in_contact():
-                ball_contact = True
-                first_contact_step = step
             dof_targets = controller.policy_step()
             controller.ctrl_step(dof_targets)
             controller.update_state()

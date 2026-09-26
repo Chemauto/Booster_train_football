@@ -60,7 +60,7 @@ NUM_ACTIONS = 22
 
 # -- head camera model (commands.py:184-187) ---------------------------------
 CAMERA_OFFSET_B = (0.054, 0.0, 0.102)
-CAMERA_BODY_TO_OPTICAL_WXYZ = (0.5, 0.5, 0.5, 0.5)
+CAMERA_BODY_TO_OPTICAL_WXYZ = (0.405580, 0.579228, 0.579228, 0.405580)  # 20 deg down, see commands.py
 CAMERA_FOV_H = 87.0
 CAMERA_FOV_V = 58.0
 
@@ -170,10 +170,12 @@ def _head_cam_pose_fn(controller):
             [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
         ])
         pos = head_pos + Rh @ np.asarray(CAMERA_OFFSET_B, dtype=np.float64)
-        # MuJoCo camera axes in head frame: x=-y_h, y=+z_h, z=-x_h
-        R_cam_in_head = np.array([[0.0, 0.0, -1.0],
+        # MuJoCo camera axes in the head frame (cols = cam x,y,z in head).
+        # Matches k1_soccer_14x9.xml head_cam quat: 20 deg pitch down, i.e.
+        # cam x = head -y (image right), looks along head +x tilted -z.
+        R_cam_in_head = np.array([[0.0, 0.342020, -0.939693],
                                   [-1.0, 0.0, 0.0],
-                                  [0.0, 1.0, 0.0]])
+                                  [0.0, 0.939693, 0.342020]])
         return pos, Rh @ R_cam_in_head
     return pose
 
@@ -351,5 +353,5 @@ class KickAmpPolicyCfg(PolicyCfg):
     yolo_width: int = 640
     yolo_height: int = 360
     yolo_refresh_every: int = 2   # 25 Hz, matches training virtual perception
-    yolo_delay_steps: int = 0
+    yolo_delay_steps: int = 6   # training ball_delay_steps nominal (6 = 120 ms)
     yolo_pose_fn: object = None   # () -> (pos_w, R_mj) for the ROS2 source
